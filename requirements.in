@@ -1,0 +1,5 @@
+pip-tools
+pyserial
+pyserial-asyncio
+rich
+pynmea2
