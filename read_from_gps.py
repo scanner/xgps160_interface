@@ -275,32 +275,42 @@ class XGPS160(asyncio.Protocol):
                 self.rsp160_cmd = self.pkt_buffer[3]
                 self.rsp160_buf[0:3] = self.pkt_buffer[4:7]
                 self.rsp160_len = self.rx_bin_len
+				match self.pkt_buffer[4]:
+					case Cmd160.getSettings:
+                    	print("XGPS160 sending settings")
+	                    blk = self.pkt_buffer[8]
+    	                blk <<= 8
+        	            blk |= self.pkt_buffer[7]
 
-                if self.pkt_buffer[4] == Cmd160.getSettings:
-                    print("XGPS160 sending settings")
-                    blk = self.pkt_buffer[8]
-                    blk <<= 8
-                    blk |= self.pkt_buffer[7]
+            	        offset = self.pkt_buffer[10]
+                	    offset <<= 8
+                    	offset |= self.pkt_bufferBuf[9]
 
-                    offset = self.pkt_buffer[10]
-                    offset <<= 8
-                    offset |= self.pkt_bufferBuf[9]
+	                    self.cfg_gps_settings = self.pkt_buffer[5]
+	                    self.cfg_log_interval = self.pkt_buffer[6]
+	                    self.log_update_rate = self.pkt_buffer[6]
+	                    print(f"Log update rate is: {self.log_update_rate}")
 
-                    self.cfg_gps_settings = self.pkt_buffer[5]
-                    self.cfg_log_interval = self.pkt_buffer[6]
-                    self.log_update_rate = self.pkt_buffer[6]
-                    print(f"Log update rate is: {self.log_update_rate}")
+	                    self.cfg_blk = blk
+	                    self.cfg_log_offste = offset
 
-                    self.cfg_blk = blk
-                    self.cfg_log_offste = offset
-
-                    if self.cfg_gps_settings & 0x40:
-                        print("Datalog enabled")
-                        self.always_record_when_device_is_on = True
-                    else:
-                        print("Datalog disabled")
-                        self.always_record_when_device_is_on = False
-
+    	                if self.cfg_gps_settings & 0x40:
+	                        print("Datalog enabled")
+	                        self.always_record_when_device_is_on = True
+	                    else:
+	                        print("Datalog disabled")
+	                        self.always_record_when_device_is_on = False
+						
+						if self.cfg_gps_settings & 0x80:
+							print("Datalog overwrite")
+							self.stop_recording_when_mem_full = False
+						else:
+							print("Datalog no overwrite")
+							self.stop_recording_when_mem_full = True
+						self.device_settings_have_been_read = True
+					case Cmd160.logListItem:
+				
+						
     ####################################################################
     #
     def parse_nmea(self, nmea_packet: str):
