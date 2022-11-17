@@ -46,6 +46,7 @@ class Cmd160(IntEnum):
     """
     The possible commands for the XGPS160.
     """
+
     ack = 0
     nack = 1
     response = 2
@@ -113,6 +114,7 @@ class XGPS160(asyncio.Protocol):
 
         self.is_connected = False
 
+        self.cfg_gps_settings = 0
         self.transport = None
         self.firmware_rev = ""
         self.serial_number = ""
@@ -217,7 +219,10 @@ class XGPS160(asyncio.Protocol):
                     self.rx_messages_total += 1
                     self.rx_sync = False
                     # self.pkt_buffer[self.rx_idx + 1] = 0
-                    nmea_packet = str(self.pkt_buffer[: self.rx_idx], encoding="tuf-8")
+                    nmea_packet = str(
+                        self.pkt_buffer[: self.rx_idx],
+                        encoding="tuf-8",
+                    )
                     self.parse_nmea(nmea_packet)
 
     ####################################################################
@@ -248,13 +253,15 @@ class XGPS160(asyncio.Protocol):
     ####################################################################
     #
     def parse_command_response(self):
-        """
-        """
+        """ """
         size = self.rx_bin_len + 3
         cksum = sum(self.pkt_buffer[:size])
 
         if cksum != self.pkt_buffer[self.rx_bin_len + 3]:
-            print(f"Checksum error on {self.pkt_buffer[:size]} ({self.pkt_buffer[size]})")
+            print(
+                f"Checksum error on {self.pkt_buffer[:size]} "
+                f"({self.pkt_buffer[size]})"
+            )
             return
 
         match self.pkt_buffer[3]:
@@ -270,10 +277,29 @@ class XGPS160(asyncio.Protocol):
                 self.rsp160_len = self.rx_bin_len
 
                 if self.pkt_buffer[4] == Cmd160.getSettings:
-                    print("XGPS160 sending settings.")
+                    print("XGPS160 sending settings")
                     blk = self.pkt_buffer[8]
                     blk <<= 8
                     blk |= self.pkt_buffer[7]
+
+                    offset = self.pkt_buffer[10]
+                    offset <<= 8
+                    offset |= self.pkt_bufferBuf[9]
+
+                    self.cfg_gps_settings = self.pkt_buffer[5]
+                    self.cfg_log_interval = self.pkt_buffer[6]
+                    self.log_update_rate = self.pkt_buffer[6]
+                    print(f"Log update rate is: {self.log_update_rate}")
+
+                    self.cfg_blk = blk
+                    self.cfg_log_offste = offset
+
+                    if self.cfg_gps_settings & 0x40:
+                        print("Datalog enabled")
+                        self.always_record_when_device_is_on = True
+                    else:
+                        print("Datalog disabled")
+                        self.always_record_when_device_is_on = False
 
     ####################################################################
     #
@@ -292,8 +318,7 @@ async def main():
     Find the XGPS 160 serial port. Listen for messages from it.
     """
     loop = asyncio.get_event_loop()
-    xgps = XGPS160(xgps_serialport())
-    await xgps.connect()
+    xgps = await XGPS160.connect(xgps_serialport(), loop)
 
     status = await xgps.device_settings()
 
