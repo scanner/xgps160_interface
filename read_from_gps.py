@@ -52,6 +52,15 @@ def xgps_serialport():
         return serial_ports[0]
     raise FileNotFoundError(f"Found no XGPS serialport in {DEVICES_DIR}")
 
+LogEntryStruct = struct.Struct("!BB")
+LogEntry = namedtuple("LogEntry", "seq type" )
+
+DataEntryStruct = struct.Struct("!HHB3s3s3sHBBBB")
+# NOTE: latitude, longitude, altitude are 3 byte long `bytes` type. Need to do int.from_bytes(bytes,byteorder="big",signed=True)
+DataEntry = namedtuple("DataEntry","date tod tod2 latitude longitude altitude speed heading satnum satsig dop")
+# NOTE: Longitutde, latitude, altitude are MSB order so need to be interprete separately with int.from_bytes()
+Data2EntryStruct = struct.Struct("!HHB4s4s3sHBB")
+
 ########################################################################
 ########################################################################
 #
@@ -340,6 +349,33 @@ class XGPS160(asyncio.Protocol):
 							logs = None
 						else:
 							log_list_item = LogListItem._make(LogListItemStruct.unpack_from(pkt_buffer, 10))
+							log_start_time = datetime_str(log_list_item.start_date, log_list_item.start_tod)
+							
+							logs["interval"] = log_list_item.interval
+							logs["count_entry"] = log_list_item.count_entry
+							sample_interval = float(log_list_item.interval)
+							if log_list_item.interval == 255:
+								sample_interval = 10.0
+								
+							recording_length_in_sec = log_list_item.country_entry * (sample_interval / 10.0)
+							duration = timedelta(seconds=recording_length_in_sec)
+						logs["human_friendly_duration"]=str(duration)
+							logs["sig"]=log_list_item.sig
+							logs["start_time"]=log_start_time
+							logs["duration"]=duration
+							logs["start_block"] = log_list_item.start_block
+							logs["count_block"] = log_list_item.count_block
+							self.log_list_entries.append(logs)
+						self.processing_log_list_entries_after_delay()
+							self.new_log_list_item_received = True
+					case Cmd160.logReadBulk:
+						addr, data_size = struct.unpack_from("!HB", 6)
+						
+						log_read_bulk_count = data_size / LogEntryStruct.size
+							
+						
+							
+							
 							
     ####################################################################
     #
