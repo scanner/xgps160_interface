@@ -17,6 +17,7 @@ import pathlib
 from typing import Optional
 from enum import IntEnum
 from datetime import datetime, UTC
+from collections import namedtuple
 
 # 3rd party imports
 #
@@ -60,6 +61,7 @@ DataEntryStruct = struct.Struct("!HHB3s3s3sHBBBB")
 DataEntry = namedtuple("DataEntry","date tod tod2 latitude longitude altitude speed heading satnum satsig dop")
 # NOTE: Longitutde, latitude, altitude are MSB order so need to be interprete separately with int.from_bytes()
 Data2EntryStruct = struct.Struct("!HHB4s4s3sHBB")
+Data2Entry = namedtuple("Data2Entry", "date tod tod2 latitutde longitude altitude speed heading satsig")
 
 ########################################################################
 ########################################################################
@@ -370,13 +372,46 @@ class XGPS160(asyncio.Protocol):
 							self.new_log_list_item_received = True
 					case Cmd160.logReadBulk:
 						addr, data_size = struct.unpack_from("!HB", 6)
-						
-						log_read_bulk_count = data_size / LogEntryStruct.size
-							
-						
-							
-							
-							
+						log_entry_size = LogEntryStruct.size + max(DataEntryStruct.size, Data2EntryStruct.size)
+						self.log_read_bulk_count = data_size / log_entry_size
+						if addr == 0 and data_size == 0:
+							# End-of-data
+							#
+							self.log_read_bulk_count |= 0x1000000
+							self.decode_log_bulk()
+							self.log_read_bulk_count = 0
+							self.log_bulk_recode_cnt = 0
+							self.log_bulk_by_cnt = 0
+							self.log_records = []
+						else:
+							# Looks like we get 5 log entries at a time.
+							for loop_idx in range(5):
+								idx = 10 + (loop_idx * log_entry_size)
+								log_entry = LogEntry._make(LogEntryStruct.unpack_from(self.pkt_buffer,idx))
+									if LogEntry.type == 1:
+										de = DataEntry._make(DataEntryStruct.unpack_from(self.pkt_buffer,idx+LogEntryStruct.size))
+									else:
+										de = Data2Entry._make(Data2EntryStruct.unpack_from(self.pkt_buffer,idx + LogEntryStruct.size))
+									self.log_records.append((log_entry, de))
+					case Cmd160.logDelBlock:
+						if self.pkt_buffer[5] != 0x01:
+							print("Error deleting block data")
+				case Cmd160.response:
+					self.rsp160_cmd = self.pkt_buffer[3]
+					self.rsp160_len = 0
+				case _default:
+					print("huh.. unknown response code")
+
+	def get_used_storage_percent():
+		count_block = 0
+		for log_list in self.log_list_entries:
+			count_block += log_list["count_block"]
+		percent = (count_block * 1000 / 520)
+		if percent > 0 and percent < 10:
+			percent = 10
+			
+		return percent / 10
+
     ####################################################################
     #
     def parse_nmea(self, nmea_packet: str):
