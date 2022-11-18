@@ -12,10 +12,11 @@ anything from it to see if I have the protocol correct.
 import asyncio
 import sys
 import time
-import packbits
+import struct
 import pathlib
 from typing import Optional
 from enum import IntEnum
+from datetime import datetime, UTC
 
 # 3rd party imports
 #
@@ -25,6 +26,19 @@ from rich.console import Console
 DEVICES_DIR = "/dev/"
 XGPS_SERIAL_PATERN = "tty.XGPS160*"
 
+
+####################################################################
+#
+def datetime_str(date_bin: int, time_of_day: int) -> datetime:
+	year = 2012 + date_bin / 372
+	month = 1 + (date_bin % 372) / 31
+	day = 1 + (date_bin % 31)
+	
+	hour = time_of_day / 3600
+	minute = (time_of_day % 3600) / 60
+	second = time_of_day % 60
+	
+	return datetime(year=year, month=month, second=second, hour=hour, minute=minute, second=second, tzinfo=UTC)
 
 ####################################################################
 #
@@ -38,6 +52,11 @@ def xgps_serialport():
         return serial_ports[0]
     raise FileNotFoundError(f"Found no XGPS serialport in {DEVICES_DIR}")
 
+########################################################################
+########################################################################
+#
+LogListItemStruct = struct.Struct("!BBHIHHH")
+LogListItem = namedtuple("LogListItem", "sig interval start_date start_tod start_block count_entry count_block")
 
 ########################################################################
 ########################################################################
@@ -309,8 +328,19 @@ class XGPS160(asyncio.Protocol):
 							self.stop_recording_when_mem_full = True
 						self.device_settings_have_been_read = True
 					case Cmd160.logListItem:
-				
-						
+						logs = {}
+						# XXX These two ops are just converting two bytes in to a 16bit int.. use struct module
+						list_idx, list_total = struct.unpack_from("!HH", self.pkt_buffer, 6)
+						# There is bug in firmware v. 1.3.0. The cmd160_logList command will append a duplicate of the last long
+                		# entry. For example, if there are 3 recorded logs, the command will repond that there are four: log 0,
+                		# log 1, log 2 and log 2 again.
+						if list_idx == list_total:
+							list_idx = 0
+							list_total = 0
+							logs = None
+						else:
+							log_list_item = LogListItem._make(LogListItemStruct.unpack_from(pkt_buffer, 10))
+							
     ####################################################################
     #
     def parse_nmea(self, nmea_packet: str):
