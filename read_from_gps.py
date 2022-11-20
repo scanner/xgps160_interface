@@ -31,15 +31,15 @@ XGPS_SERIAL_PATERN = "tty.XGPS160*"
 ####################################################################
 #
 def datetime_str(date_bin: int, time_of_day: int) -> datetime:
-	year = 2012 + date_bin / 372
-	month = 1 + (date_bin % 372) / 31
-	day = 1 + (date_bin % 31)
-	
-	hour = time_of_day / 3600
-	minute = (time_of_day % 3600) / 60
-	second = time_of_day % 60
-	
-	return datetime(year=year, month=month, second=second, hour=hour, minute=minute, second=second, tzinfo=UTC)
+        year = 2012 + date_bin / 372
+        month = 1 + (date_bin % 372) / 31
+        day = 1 + (date_bin % 31)
+
+        hour = time_of_day / 3600
+        minute = (time_of_day % 3600) / 60
+        second = time_of_day % 60
+
+        return datetime(year=year, month=month, second=second, hour=hour, minute=minute, second=second, tzinfo=UTC)
 
 ####################################################################
 #
@@ -305,112 +305,117 @@ class XGPS160(asyncio.Protocol):
                 self.rsp160_cmd = self.pkt_buffer[3]
                 self.rsp160_buf[0:3] = self.pkt_buffer[4:7]
                 self.rsp160_len = self.rx_bin_len
-				match self.pkt_buffer[4]:
-					case Cmd160.getSettings:
-                    	print("XGPS160 sending settings")
-	                    blk = self.pkt_buffer[8]
-    	                blk <<= 8
-        	            blk |= self.pkt_buffer[7]
+                match self.pkt_buffer[4]:
+                    case Cmd160.getSettings:
+                        print("XGPS160 sending settings")
+                        blk = self.pkt_buffer[8]
+                        blk <<= 8
+                        blk |= self.pkt_buffer[7]
 
-            	        offset = self.pkt_buffer[10]
-                	    offset <<= 8
-                    	offset |= self.pkt_bufferBuf[9]
+                        offset = self.pkt_buffer[10]
+                        offset <<= 8
+                        offset |= self.pkt_bufferBuf[9]
 
-	                    self.cfg_gps_settings = self.pkt_buffer[5]
-	                    self.cfg_log_interval = self.pkt_buffer[6]
-	                    self.log_update_rate = self.pkt_buffer[6]
-	                    print(f"Log update rate is: {self.log_update_rate}")
+                        self.cfg_gps_settings = self.pkt_buffer[5]
+                        self.cfg_log_interval = self.pkt_buffer[6]
+                        self.log_update_rate = self.pkt_buffer[6]
+                        print(f"Log update rate is: {self.log_update_rate}")
 
-	                    self.cfg_blk = blk
-	                    self.cfg_log_offste = offset
+                        self.cfg_blk = blk
+                        self.cfg_log_offste = offset
 
-    	                if self.cfg_gps_settings & 0x40:
-	                        print("Datalog enabled")
-	                        self.always_record_when_device_is_on = True
-	                    else:
-	                        print("Datalog disabled")
-	                        self.always_record_when_device_is_on = False
-						
-						if self.cfg_gps_settings & 0x80:
-							print("Datalog overwrite")
-							self.stop_recording_when_mem_full = False
-						else:
-							print("Datalog no overwrite")
-							self.stop_recording_when_mem_full = True
-						self.device_settings_have_been_read = True
-					case Cmd160.logListItem:
-						logs = {}
-						# XXX These two ops are just converting two bytes in to a 16bit int.. use struct module
-						list_idx, list_total = struct.unpack_from("!HH", self.pkt_buffer, 6)
-						# There is bug in firmware v. 1.3.0. The cmd160_logList command will append a duplicate of the last long
-                		# entry. For example, if there are 3 recorded logs, the command will repond that there are four: log 0,
-                		# log 1, log 2 and log 2 again.
-						if list_idx == list_total:
-							list_idx = 0
-							list_total = 0
-							logs = None
-						else:
-							log_list_item = LogListItem._make(LogListItemStruct.unpack_from(pkt_buffer, 10))
-							log_start_time = datetime_str(log_list_item.start_date, log_list_item.start_tod)
-							
-							logs["interval"] = log_list_item.interval
-							logs["count_entry"] = log_list_item.count_entry
-							sample_interval = float(log_list_item.interval)
-							if log_list_item.interval == 255:
-								sample_interval = 10.0
-								
-							recording_length_in_sec = log_list_item.country_entry * (sample_interval / 10.0)
-							duration = timedelta(seconds=recording_length_in_sec)
-						logs["human_friendly_duration"]=str(duration)
-							logs["sig"]=log_list_item.sig
-							logs["start_time"]=log_start_time
-							logs["duration"]=duration
-							logs["start_block"] = log_list_item.start_block
-							logs["count_block"] = log_list_item.count_block
-							self.log_list_entries.append(logs)
-						self.processing_log_list_entries_after_delay()
-							self.new_log_list_item_received = True
-					case Cmd160.logReadBulk:
-						addr, data_size = struct.unpack_from("!HB", 6)
-						log_entry_size = LogEntryStruct.size + max(DataEntryStruct.size, Data2EntryStruct.size)
-						self.log_read_bulk_count = data_size / log_entry_size
-						if addr == 0 and data_size == 0:
-							# End-of-data
-							#
-							self.log_read_bulk_count |= 0x1000000
-							self.decode_log_bulk()
-							self.log_read_bulk_count = 0
-							self.log_bulk_recode_cnt = 0
-							self.log_bulk_by_cnt = 0
-							self.log_records = []
-						else:
-							# Looks like we get 5 log entries at a time.
-							for loop_idx in range(5):
-								idx = 10 + (loop_idx * log_entry_size)
-								log_entry = LogEntry._make(LogEntryStruct.unpack_from(self.pkt_buffer,idx))
-									if LogEntry.type == 1:
-										de = DataEntry._make(DataEntryStruct.unpack_from(self.pkt_buffer,idx+LogEntryStruct.size))
-									else:
-										de = Data2Entry._make(Data2EntryStruct.unpack_from(self.pkt_buffer,idx + LogEntryStruct.size))
-									self.log_records.append((log_entry, de))
-					case Cmd160.logDelBlock:
-						if self.pkt_buffer[5] != 0x01:
-							print("Error deleting block data")
-				case Cmd160.response:
-					self.rsp160_cmd = self.pkt_buffer[3]
-					self.rsp160_len = 0
-				case _default:
-					print("huh.. unknown response code")
+                        if self.cfg_gps_settings & 0x40:
+                            print("Datalog enabled")
+                            self.always_record_when_device_is_on = True
+                        else:
+                            print("Datalog disabled")
+                            self.always_record_when_device_is_on = False
 
-	def get_used_storage_percent():
-		count_block = 0
-		for log_list in self.log_list_entries:
-			count_block += log_list["count_block"]
-		percent = (count_block * 1000 / 520)
-		if percent > 0 and percent < 10:
-			percent = 10
-			
-		return percent / 10
+                            if self.cfg_gps_settings & 0x80:
+                                print("Datalog overwrite")
+                                self.stop_recording_when_mem_full = False
+                            else:
+                                print("Datalog no overwrite")
+                                self.stop_recording_when_mem_full = True
+                                self.device_settings_have_been_read = True
+                    case Cmd160.logListItem:
+                        logs = {}
+                        # XXX These two ops are just converting two
+                        #     bytes in to a 16bit int.. use struct module
+                        list_idx, list_total = struct.unpack_from("!HH", self.pkt_buffer, 6)
+                        # There is bug in firmware v. 1.3.0. The
+                        # cmd160_logList command will append a
+                        # duplicate of the last long entry. For
+                        # example, if there are 3 recorded logs, the
+                        # command will repond that there are four: log
+                        # 0, log 1, log 2 and log 2 again.
+                        if list_idx == list_total:
+                            list_idx = 0
+                            list_total = 0
+                            logs = None
+                        else:
+                            log_list_item = LogListItem._make(LogListItemStruct.unpack_from(pkt_buffer, 10))
+                            log_start_time = datetime_str(log_list_item.start_date, log_list_item.start_tod)
+
+                            logs["interval"] = log_list_item.interval
+                            logs["count_entry"] = log_list_item.count_entry
+                            sample_interval = float(log_list_item.interval)
+                            if log_list_item.interval == 255:
+                                sample_interval = 10.0
+                                recording_length_in_sec = log_list_item.country_entry * (sample_interval / 10.0)
+                                duration = timedelta(seconds=recording_length_in_sec)
+                                logs["human_friendly_duration"]=str(duration)
+                                logs["sig"]=log_list_item.sig
+                                logs["start_time"]=log_start_time
+                                logs["duration"]=duration
+                                logs["start_block"] = log_list_item.start_block
+                                logs["count_block"] = log_list_item.count_block
+                                self.log_list_entries.append(logs)
+                                self.processing_log_list_entries_after_delay()
+                                self.new_log_list_item_received = True
+                    case Cmd160.logReadBulk:
+                        addr, data_size = struct.unpack_from("!HB", 6)
+                        log_entry_size = LogEntryStruct.size + max(DataEntryStruct.size, Data2EntryStruct.size)
+                        self.log_read_bulk_count = data_size / log_entry_size
+                        if addr == 0 and data_size == 0:
+                            # End-of-data
+                            #
+                            self.log_read_bulk_count |= 0x1000000
+                            self.decode_log_bulk()
+                            self.log_read_bulk_count = 0
+                            self.log_bulk_recode_cnt = 0
+                            self.log_bulk_by_cnt = 0
+                            self.log_records = []
+                        else:
+                            # Looks like we get 5 log entries at a time.
+                            for loop_idx in range(5):
+                                idx = 10 + (loop_idx * log_entry_size)
+                                log_entry = LogEntry._make(LogEntryStruct.unpack_from(self.pkt_buffer,idx))
+                                if LogEntry.type == 1:
+                                    de = DataEntry._make(DataEntryStruct.unpack_from(self.pkt_buffer,idx+LogEntryStruct.size))
+                                else:
+                                    de = Data2Entry._make(Data2EntryStruct.unpack_from(self.pkt_buffer,idx + LogEntryStruct.size))
+                                    self.log_records.append((log_entry, de))
+                    case Cmd160.logDelBlock:
+                    if self.pkt_buffer[5] != 0x01:
+                        print("Error deleting block data")
+                    case Cmd160.response:
+                        self.rsp160_cmd = self.pkt_buffer[3]
+                        self.rsp160_len = 0
+                    case _default:
+                    print("huh.. unknown response code")
+
+    ####################################################################
+    #
+    def get_used_storage_percent(self):
+            count_block = 0
+            for log_list in self.log_list_entries:
+                    count_block += log_list["count_block"]
+            percent = (count_block * 1000 / 520)
+            if percent > 0 and percent < 10:
+                    percent = 10
+
+            return percent / 10
 
     ####################################################################
     #
