@@ -6,7 +6,6 @@
 Read from an XGPS 160 (Dualav SkyPro GPS).. just trying to read
 anything from it to see if I have the protocol correct.
 """
-
 # system imports
 #
 import asyncio
@@ -16,13 +15,18 @@ import struct
 import pathlib
 from typing import Optional
 from enum import IntEnum
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from collections import namedtuple
 
 # 3rd party imports
 #
 import serial_asyncio
 from rich.console import Console
+from rich import print as rprint
+from rich.traceback import install as install_tb
+
+
+install_tb(show_locals=True)
 
 DEVICES_DIR = "/dev/"
 XGPS_SERIAL_PATERN = "tty.XGPS160*"
@@ -123,6 +127,7 @@ LogListItem = namedtuple(
     "sig interval start_date start_tod start_block count_entry count_block",
 )
 
+
 ########################################################################
 ########################################################################
 #
@@ -178,7 +183,7 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def __init__(self, serial_port: str, console: Optional[Console]):
+    def __init__(self, serial_port: str, console: Optional[Console] = None):
         self.serial_port = serial_port
         self.console = console
 
@@ -230,8 +235,8 @@ class XGPS160(asyncio.Protocol):
     async def connect(
         cls,
         serial_port: str,
-        loop: Optional[asyncio.AbstractEventLoop],
-        console: Optional[Console],
+        loop: Optional[asyncio.AbstractEventLoop] = None,
+        console: Optional[Console] = None,
     ):
         """
         Creates the XGPS160 object and connects to the XGPS160.
@@ -250,21 +255,21 @@ class XGPS160(asyncio.Protocol):
     ####################################################################
     #
     def connection_made(self, transport):
-        print("Connected!")
+        rprint("Connected!")
         self.transport = transport
         self.is_connected = True
 
     ####################################################################
     #
     def connection_lost(self, exc):
-        print(f"Connetion lost: {exc}")
+        rprint(f"Connetion lost: {exc}")
         self.transport = None
         self.is_connected = False
 
     ####################################################################
     #
     def data_received(self, data):
-        print("data received", repr(data))
+        rprint("data received", repr(data))
 
         for x in data:
             if self.rx_bin_sync:
@@ -316,7 +321,7 @@ class XGPS160(asyncio.Protocol):
         The underlying connection's buffer is filling up and it is telling
         us to stop writing for awhile.
         """
-        print("Please pause writing!")
+        rprint("Please pause writing!")
 
     ####################################################################
     #
@@ -325,12 +330,12 @@ class XGPS160(asyncio.Protocol):
         The underlying connection's buffer once again has room for more
         data, so we can resume writing data.
         """
-        print("Please resume writing!")
+        rprint("Please resume writing!")
 
     ####################################################################
     #
     def eof_received(self):
-        print("EOF Received!")
+        rprint("EOF Received!")
         self.is_connected = False
         self.transport = None
 
@@ -342,7 +347,7 @@ class XGPS160(asyncio.Protocol):
         cksum = sum(self.pkt_buffer[:size])
 
         if cksum != self.pkt_buffer[self.rx_bin_len + 3]:
-            print(
+            rprint(
                 f"Checksum error on {self.pkt_buffer[:size]} "
                 f"({self.pkt_buffer[size]})"
             )
@@ -350,18 +355,18 @@ class XGPS160(asyncio.Protocol):
 
         match self.pkt_buffer[3]:
             case Cmd160.ack | Cmd160.nack:
-                print("Command: ACK or NACK")
+                rprint("Command: ACK or NACK")
                 self.rsp160_cmd = self.pkt_buffer[3]
                 self.rsp160_len = 0
 
             case Cmd160.fwRsp:
-                print("Command fw response")
+                rprint("Command fw response")
                 self.rsp160_cmd = self.pkt_buffer[3]
                 self.rsp160_buf[0:3] = self.pkt_buffer[4:7]
                 self.rsp160_len = self.rx_bin_len
                 match self.pkt_buffer[4]:
                     case Cmd160.getSettings:
-                        print("XGPS160 sending settings")
+                        rprint("XGPS160 sending settings")
                         blk = self.pkt_buffer[8]
                         blk <<= 8
                         blk |= self.pkt_buffer[7]
@@ -373,23 +378,23 @@ class XGPS160(asyncio.Protocol):
                         self.cfg_gps_settings = self.pkt_buffer[5]
                         self.cfg_log_interval = self.pkt_buffer[6]
                         self.log_update_rate = self.pkt_buffer[6]
-                        print(f"Log update rate is: {self.log_update_rate}")
+                        rprint(f"Log update rate is: {self.log_update_rate}")
 
                         self.cfg_blk = blk
                         self.cfg_log_offste = offset
 
                         if self.cfg_gps_settings & 0x40:
-                            print("Datalog enabled")
+                            rprint("Datalog enabled")
                             self.always_record_when_device_is_on = True
                         else:
-                            print("Datalog disabled")
+                            rprint("Datalog disabled")
                             self.always_record_when_device_is_on = False
 
                             if self.cfg_gps_settings & 0x80:
-                                print("Datalog overwrite")
+                                rprint("Datalog overwrite")
                                 self.stop_recording_when_mem_full = False
                             else:
-                                print("Datalog no overwrite")
+                                rprint("Datalog no overwrite")
                                 self.stop_recording_when_mem_full = True
                                 self.device_settings_have_been_read = True
                     case Cmd160.logListItem:
@@ -477,16 +482,16 @@ class XGPS160(asyncio.Protocol):
                                     self.log_records.append((log_entry, de))
                     case Cmd160.logDelBlock:
                         if self.pkt_buffer[5] == 0x01:
-                            print("Block data deleted")
+                            rprint("Block data deleted")
                             # self.get_list_of_recorded_logs()
                         else:
-                            print("Error deleting block data")
+                            rprint("Error deleting block data")
 
                     case Cmd160.response:
                         self.rsp160_cmd = self.pkt_buffer[3]
                         self.rsp160_len = 0
                     case _:
-                        print("huh.. unknown response code")
+                        rprint("huh.. unknown response code")
 
     ####################################################################
     #
@@ -507,7 +512,7 @@ class XGPS160(asyncio.Protocol):
         Keyword Arguments:
         packet: bytes --
         """
-        print(f"NMEA Packet: {nmea_packet}")
+        rprint(f"NMEA Packet: {nmea_packet}")
 
     ####################################################################
     #
@@ -516,10 +521,10 @@ class XGPS160(asyncio.Protocol):
         self.log_data_samples = []
         for log_entry, data_entry in self.log_records:
             if log_entry.type == 0:
-                data_entry = log_record.data  # Union.. dataentry vs data2entry
+                data_entry = log_entry.data  # Union.. dataentry vs data2entry
                 # ....
             else:
-                data_2_entry = log_record.data
+                data_2_entry = log_entry.data
                 # ....
 
 
@@ -532,9 +537,16 @@ async def main():
     loop = asyncio.get_event_loop()
     xgps = await XGPS160.connect(xgps_serialport(), loop)
 
-    status = await xgps.device_settings()
+    settings = await xgps.device_settings()
+    rprint(f"Device settings: {settings}")
 
-    return
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        rprint("[red]Keyboard interrupt, exiting..")
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close
 
 
 ############################################################################
@@ -546,7 +558,6 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
     loop.close()
-
 #
 ############################################################################
 ############################################################################

@@ -3,3 +3,7 @@ pyserial
 pyserial-asyncio
 rich
 pynmea2
+black
+isort
+ruff
+ipython

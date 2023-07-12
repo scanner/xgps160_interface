@@ -5,23 +5,33 @@
 """
 Just connect to the XGPS160 and print out all the data we receive from it.
 """
-
 # system imports
 #
 import asyncio
 import serial_asyncio
 
+# 3rd party imports
+#
+from rich.traceback import install as install_tb
+from rich import print as rprint
 
+
+install_tb(show_locals=True)
+
+
+########################################################################
+########################################################################
+#
 class InputChunkProtocol(asyncio.Protocol):
     def connection_made(self, transport):
-        print("Connected!")
+        rprint("[bold][green]Connected![/green][/bold]")
         self.transport = transport
 
     def data_received(self, data):
-        print("data received", repr(data))
+        rprint("data received", repr(data))
 
         # stop callbacks again immediately
-        self.pause_reading()
+        # self.pause_reading()
 
     def pause_reading(self):
         # This will stop the callbacks to data_received
@@ -33,26 +43,33 @@ class InputChunkProtocol(asyncio.Protocol):
         self.transport.resume_reading()
 
 
+########################################################################
+#
 async def reader(loop):
+    rprint("[blue]Connecting..[/blue]")
     transport, protocol = await serial_asyncio.create_serial_connection(
         loop,
         InputChunkProtocol,
         "/dev/tty.XGPS160-770173",
         baudrate=115200,
     )
+    rprint("[green]Entering reading loop.[/green]")
 
     while True:
         await asyncio.sleep(0.3)
-        protocol.resume_reading()
+        # protocol.resume_reading()
 
 
 #############################################################################
 #
 def main():
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(reader(loop))
-    loop.close()
-    return
+    try:
+        loop.run_until_complete(reader(loop))
+    except KeyboardInterrupt:
+        rprint("[red]Caught keyboard interrupt, exiting..[/red]")
+    finally:
+        loop.close()
 
 
 ############################################################################
