@@ -8,6 +8,7 @@ Class for reading from the SkyPro XGP160 via bluetooth
 import asyncio
 import struct
 import pathlib
+import traceback
 from typing import Optional
 from enum import IntEnum, Enum
 from datetime import datetime, timedelta, UTC
@@ -215,16 +216,12 @@ class XGPS160(asyncio.Protocol):
 
         self.rcvd_buff = None
 
-        self.rx_sync = False
-        self.rx_bin_sync = False
-        self.rx_idx = 0
-        self.rx_bin_len = 0
         self.rx_bytes_count = 0
         self.rx_bytes_total = 0
         self.rx_messages_total = 0
 
         self.rsp160_cmd = 0
-        self.rsp160_buf = bytearray(256)
+
         self.rsp160_len = 0
 
         self.is_connected = False
@@ -330,7 +327,7 @@ class XGPS160(asyncio.Protocol):
                     # 0x88 is a command response message from the XGPS160.
                     #
                     # If the buffer is too short then do not clear
-                    # `self.rcvd_buffer`. The next time this method is called
+                    # `self.rcvd_buff`. The next time this method is called
                     # new data will be appended on to the end of the existing
                     # received buffer.
                     #
@@ -346,7 +343,7 @@ class XGPS160(asyncio.Protocol):
                     #
                     if self.rcvd_buff[1] != 0xEE:
                         rprint("[red]Expected binary packet, 0xEE missing")
-                        self.rcvd_buff = self.rcvd_buf[1:]
+                        self.rcvd_buff = self.rcvd_buff[1:]
                         return
 
                     # The 3rd byte in the buffer is the length of the command
@@ -354,25 +351,43 @@ class XGPS160(asyncio.Protocol):
                     # have enough data in it, return letting more accumulate in
                     # self.rcvd_buff.
                     #
-                    binary_length = self.rcvd_buff[3]
-                    if len(self.rcvd_buff[3:]) < binary_length:
+                    cmd_resp_length = self.rcvd_buff[2]
+                    if (len(self.rcvd_buff) - 3) < cmd_resp_length:
                         rprint(
-                            f"[red]Binary packet too short. Must be at least {binary_length} (length {len(self.rcvd_buff)-3})[/red]"
+                            "[red]Binary packet too short. Must be at "
+                            f"least {cmd_resp_length} (length: "
+                            f"{len(self.rcvd_buff)-3})[/red]"
                         )
                         return
 
                     # The command response is everything after the first three
                     # bytes up to the length of the command response.
                     #
-                    cmd_response = self.rcvd_buff[3:binary_length]
-                    self.parse_command_response(cmd_response)
+                    checksum = self.rcvd_buff[cmd_resp_length + 3]
+                    cs = sum(self.rcvd_buff[: cmd_resp_length + 3]) & 255
+                    if checksum == cs:
+                        try:
+                            cmd_response = self.rcvd_buff[3:cmd_resp_length + 3]
+                            rprint(
+                                f"[bold][red]**[/red][/bold] command response length: {cmd_resp_length}"
+                            )
+                            rprint(f"   received buffer: {repr(self.rcvd_buff)}")
+                            rprint(f"   command response: {repr(cmd_response)}")
+                            self.parse_command_response(cmd_response)
+                        except Exception as exc:
+                            traceback.print_exc()
+                            rprint(
+                                f"Unable to parse command response {repr(cmd_response)}: {exc}"
+                            )
+                    else:
+                        rprint(f"Checksum error: {cs} != {checksum}")
 
                     # If there is self.rcvd_buff left after the command
                     # response attempt to parse it. Otherwise we are done with
                     # this packet.
                     #
-                    self.rcvd_buff = self.rcvd_buffer[binary_length + 3 :]
-                    if self.rcvd_buf:
+                    self.rcvd_buff = self.rcvd_buff[cmd_resp_length + 4:]
+                    if self.rcvd_buff:
                         continue
                     return
 
@@ -460,17 +475,11 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def parse_command_response(self, cmd_response):
+    def parse_command_response(self, cmd_response: bytes):
         """ """
-        cksum = sum(cmd_response) & 255
-        if cmd_response[-1] != cksum:
-            rprint(
-                f"Checksum error on {repr(cmd_response)} {cksum} != "
-                f"{cmd_response[-1]}"
-            )
-            return
+        rprint(f"parse_command_response: {repr(cmd_response)}")
 
-        cmd = self.pkt_buffer[0]
+        cmd = cmd_response[0]
         match cmd:
             case Cmd160.ack | Cmd160.nack:
                 rprint("Command: ACK or NACK")
@@ -487,14 +496,14 @@ class XGPS160(asyncio.Protocol):
                     case Cmd160.logReadBulk:
                         self.parse_log_read_bulk(cmd_response[2:])
                     case Cmd160.logDelBlock:
-                        if self.pkt_buffer[5] == 0x01:
+                        if cmd_response[2] == 0x01:
                             rprint("Block data deleted")
                             # self.get_list_of_recorded_logs()
                         else:
                             rprint("Error deleting block data")
 
                     case Cmd160.response:
-                        self.rsp160_cmd = self.pkt_buffer[3]
+                        self.rsp160_cmd = cmd
                         self.rsp160_len = 0
                     case _:
                         rprint("huh.. unknown response code")
@@ -524,11 +533,11 @@ class XGPS160(asyncio.Protocol):
         self.always_record_when_device_is_on = (
             True if self.cfg_gps_settings & 0x40 else False
         )
-        rprint("Datalog enabled: {self.always_record_when_device_is_on}")
+        rprint(f"Datalog enabled: {self.always_record_when_device_is_on}")
         self.stop_recording_when_mem_full = (
             False if self.cfg_gps_settings & 0x80 else True
         )
-        rprint("Datalog overwrite: {self.stop_recording_when_mem_full}")
+        rprint(f"Datalog overwrite: {self.stop_recording_when_mem_full}")
         self.device_settings_have_been_read = True
 
     ####################################################################
@@ -705,8 +714,12 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def read_device_settings(self):
-        """
+    # NOTE: We should make this function async and have it await
+    async def read_device_settings(self):
+        """ """
+        self.device_settings_have_been_read = False
+        self.send_command(Cmd160.getSettings, b"")
+        while not self.device_settings_have_been_read:
+            await asyncio.sleep(0.1)
 
-        """
-        self.send_command(Cmd160.getSettings, b'')
+        return self.cfg_gps_settings

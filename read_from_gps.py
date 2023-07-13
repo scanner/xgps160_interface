@@ -32,11 +32,10 @@ async def main(loop):
     rprint(f"XGPS serial port: {ser_port}")
     xgps = await XGPS160.connect(str(ser_port), loop=loop)
 
-    # settings = await xgps.device_settings()
-    xgps.read_device_settings()
-    # rprint(f"Device settings: {settings}")
+    settings = await xgps.read_device_settings()
+    rprint(f"Device settings: {settings}")
 
-    # For now loop until the loop exits.
+    # For now loop forever..
     #
     voltage = xgps.battery_voltage
     charging = xgps.is_charging
@@ -47,7 +46,8 @@ async def main(loop):
 
         if not charging and voltage != xgps.battery_voltage:
             rprint(
-                f"Battery voltage: {xgps.battery_voltage}, num nmea messages: {len(xgps.nmea_messages)}"
+                f"Battery voltage: {xgps.battery_voltage}, num nmea messages: "
+                f"{len(xgps.nmea_messages)}"
             )
             voltage = xgps.battery_voltage
         await asyncio.sleep(1)
