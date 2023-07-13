@@ -213,6 +213,8 @@ class XGPS160(asyncio.Protocol):
 
         self.nmea_messages = deque(maxlen=max_nmea_msgs)
 
+        self.rcvd_buff = None
+
         self.rx_sync = False
         self.rx_bin_sync = False
         self.rx_idx = 0
@@ -274,6 +276,10 @@ class XGPS160(asyncio.Protocol):
             serial_port,
             baudrate=115200,
         )
+
+        rprint("Connecting...")
+        while not xgps_160.is_connected:
+            await asyncio.sleep(0.1)
         return xgps_160
 
     ####################################################################
@@ -306,120 +312,126 @@ class XGPS160(asyncio.Protocol):
               we have a complete message just going to assume we get the whole
               message.
         """
-        # XXX Debugging.. skip NMEA messages
+        # If there is data in the received buffer then append the data we just
+        # received to that buffer.
         #
-        if data[0] != 0x24:
-            rprint("data received", repr(data))
+        if self.rcvd_buff:
+            self.rcvd_buff += data
+            rprint(f"data_received (appended): {repr(self.rcvd_buff)}")
+        else:
+            self.rcvd_buff = data
 
-        # Parse packets out of the data we have received until there is more
+        # Parse packets out of the data we have received until there is no more
         # data left to parse.
         #
-        while True:
-            match data[0]:
+        while self.rcvd_buff:
+            match self.rcvd_buff[0]:
                 case 0x88:
                     # 0x88 is a command response message from the XGPS160.
                     #
-                    if len(data) < 3:
-                        rprint(f"[red]Binary packet too short (length {len(data)})")
-                        return
-
-                    if data[1] != 0xEE:
-                        rprint("[red]Expected binary packet, 0xEE missing")
-                        return
-                    binary_length = data[3]
-                    if len(data[3:]) < binary_length:
+                    # If the buffer is too short then do not clear
+                    # `self.rcvd_buffer`. The next time this method is called
+                    # new data will be appended on to the end of the existing
+                    # received buffer.
+                    #
+                    if len(self.rcvd_buff) < 3:
                         rprint(
-                            f"[red]Binary packet too short. Must be at least {binary_length} (length {len(data)-3})"
+                            f"[red]Binary packet too short (length {len(self.rcvd_buff)})[/red]"
                         )
                         return
-                    cmd_response = data[3:binary_length]
+
+                    # If the second byte is not `0xEE` then this is not a valid
+                    # command response. Truncate this byte off of the buffer
+                    # and try to match it again.
+                    #
+                    if self.rcvd_buff[1] != 0xEE:
+                        rprint("[red]Expected binary packet, 0xEE missing")
+                        self.rcvd_buff = self.rcvd_buf[1:]
+                        return
+
+                    # The 3rd byte in the buffer is the length of the command
+                    # response message from the XGPS160. If the buffer does not
+                    # have enough data in it, return letting more accumulate in
+                    # self.rcvd_buff.
+                    #
+                    binary_length = self.rcvd_buff[3]
+                    if len(self.rcvd_buff[3:]) < binary_length:
+                        rprint(
+                            f"[red]Binary packet too short. Must be at least {binary_length} (length {len(self.rcvd_buff)-3})[/red]"
+                        )
+                        return
+
+                    # The command response is everything after the first three
+                    # bytes up to the length of the command response.
+                    #
+                    cmd_response = self.rcvd_buff[3:binary_length]
                     self.parse_command_response(cmd_response)
 
-                    # If there is data left after the command response attempt
-                    # to parse it. Otherwise we are done with this packet.
+                    # If there is self.rcvd_buff left after the command
+                    # response attempt to parse it. Otherwise we are done with
+                    # this packet.
                     #
-                    if len(data) > 3 + cmd_response:
-                        data = data[3 + cmd_response :]
+                    self.rcvd_buff = self.rcvd_buffer[binary_length + 3 :]
+                    if self.rcvd_buf:
                         continue
                     return
+
                 case 0x24:
                     # 0x24 == $ .. all NMEA commands begin with "$" up to `\r\n`
                     #
                     # Search for end of NEMA packet.
                     #
-                    if b"\r\n" not in data:
-                        print("[red]Packet started with '$' but no '\r\n' found.[\red]")
+                    if b"\r\n" not in self.rcvd_buff:
+                        rprint(
+                            f"[red]Packet started with '$' but no '<cr><lf>' found: [/red][blue]{self.rcvd_buff}[/blue]"
+                        )
                         return
 
-                    nmea_packet = data[: data.find(b"\r\n")].decode("utf-8")
+                    nmea_packet = self.rcvd_buff[: self.rcvd_buff.find(b"\r\n")].decode(
+                        "utf-8"
+                    )
                     try:
                         self.parse_nmea(nmea_packet)
                     except pynmea2.nmea.SentenceTypeError as exc:
                         rprint(f"[red][bold]NMEA Parse error:[/bold] {exc}[/red]")
+                    except pynmea2.nmea.ChecksumError as exc:
+                        rprint(f"[red][bold]NMEA checksum error:[/bold] {exc}[/red]")
 
-                    # If there is any data left to parse, try parsing it,
-                    # otherwise we are done with this packet.
+                    # If there is any self.rcvd_buff left to parse, try parsing
+                    # it, otherwise we are done with this packet.
                     #
-                    data = data[data.find(b"\r\n") + 2 :]
-                    if len(data):
+                    self.rcvd_buff = self.rcvd_buff[self.rcvd_buff.find(b"\r\n") + 2 :]
+                    if len(self.rcvd_buff):
                         continue
                     return
+
                 case _:
-                    rprint(f"unable to match packet: {data[0]}: '{data}'")
-                    return
+                    # If neither b'$' nor 0x88 is in the buffer then it has no
+                    # known commands and we can toss it and wait until data
+                    # arrives that has a valid command character in it.
+                    #
+                    if not any(x in self.rcvd_buff for x in (b"$", 0x88)):
+                        rprint(
+                            f"No command characters in packet: {repr(self.rcvd_buff)}"
+                        )
+                        self.rcvd_buff = None
+                        return
 
-    ####################################################################
-    #
-    def old_data_received(self, data):
-        rprint("data received", repr(data))
+                    # Truncate to the first command byte we have.
+                    #
+                    bin_pos = self.rcvd_buff.find(0x88)
+                    nmea_pos = self.rcvd_buff.find(b"$")
 
-        for x in data:
-            if self.rx_bin_sync:
-                self.pkt_buffer[self.rx_index] = x
-                self.rx_index += 1
-                match self.rx_index:
-                    case 2:  # Second marker
-                        if x != 0xEE:
-                            self.rx_bin_sync = False
-                    case 3:  # Length of packet
-                        self.rx_bin_len = x
-
-                if self.rx_index == (self.rx_bin_len + 4):
-                    self.parse_command_response()
-                    self.rx_bin_sync = False
-
-                continue
-
-            if x == 0x88:
-                self.rx_bin_sync = True
-                self.rx_bin_len = 0
-                self.rx_idx = 1
-                self.pkt_buffer[0] = x
-                continue
-
-            if not self.rx_sync:
-                if x in [b"P", b"N", b"L", b"@"]:
-                    self.rx_sync = True
-                    self.rx_idx = 0
-                    self.pkt_buffer[0] = x
-            else:
-                # We did not get a RX binary sync character or a RX sync
-                # character so this must be a NMEA sentence. Vacuum up
-                # everything until we get a `\n` and send it to the be parsed
-                # as a NMEA packet.
-                #
-                self.rx_idx += 1
-                self.pkt_buffer[self.rx_idx] = x
-
-                if x == b"\n":
-                    self.rx_messages_total += 1
-                    self.rx_sync = False
-                    # self.pkt_buffer[self.rx_idx + 1] = 0
-                    nmea_packet = str(
-                        self.pkt_buffer[: self.rx_idx],
-                        encoding="tuf-8",
-                    )
-                    self.parse_nmea(nmea_packet)
+                    if bin_pos == -1:
+                        self.rcvd_buff = self.rcvd_buff[nmea_pos:]
+                        rprint("forwarding to $")
+                        continue
+                    if nmea_pos == -1:
+                        self.rcvd_buff = self.rcvd_buff[bin_pos:]
+                        rprint("forwarding to 0x88")
+                        continue
+                    self.rcvd_buff = self.rcvd_buff[min(bin_pos, nmea_pos) :]
+                    continue
 
     ####################################################################
     #
@@ -448,145 +460,32 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def parse_command_response(self):
+    def parse_command_response(self, cmd_response):
         """ """
-        size = self.rx_bin_len + 3
-        cksum = sum(self.pkt_buffer[:size])
-
-        if cksum != self.pkt_buffer[self.rx_bin_len + 3]:
+        cksum = sum(cmd_response) & 255
+        if cmd_response[-1] != cksum:
             rprint(
-                f"Checksum error on {self.pkt_buffer[:size]} "
-                f"({self.pkt_buffer[size]})"
+                f"Checksum error on {repr(cmd_response)} {cksum} != "
+                f"{cmd_response[-1]}"
             )
             return
 
-        match self.pkt_buffer[3]:
+        cmd = self.pkt_buffer[0]
+        match cmd:
             case Cmd160.ack | Cmd160.nack:
                 rprint("Command: ACK or NACK")
-                self.rsp160_cmd = self.pkt_buffer[3]
-                self.rsp160_len = 0
+                return
 
             case Cmd160.fwRsp:
                 rprint("Command fw response")
-                self.rsp160_cmd = self.pkt_buffer[3]
-                self.rsp160_buf[0:3] = self.pkt_buffer[4:7]
-                self.rsp160_len = self.rx_bin_len
-                match self.pkt_buffer[4]:
+                sub_cmd = cmd_response[1]
+                match sub_cmd:
                     case Cmd160.getSettings:
-                        rprint("XGPS160 sending settings")
-                        blk = self.pkt_buffer[8]
-                        blk <<= 8
-                        blk |= self.pkt_buffer[7]
-
-                        offset = self.pkt_buffer[10]
-                        offset <<= 8
-                        offset |= self.pkt_bufferBuf[9]
-
-                        self.cfg_gps_settings = self.pkt_buffer[5]
-                        self.cfg_log_interval = self.pkt_buffer[6]
-                        self.log_update_rate = self.pkt_buffer[6]
-                        rprint(f"Log update rate is: {self.log_update_rate}")
-
-                        self.cfg_blk = blk
-                        self.cfg_log_offste = offset
-
-                        if self.cfg_gps_settings & 0x40:
-                            rprint("Datalog enabled")
-                            self.always_record_when_device_is_on = True
-                        else:
-                            rprint("Datalog disabled")
-                            self.always_record_when_device_is_on = False
-
-                            if self.cfg_gps_settings & 0x80:
-                                rprint("Datalog overwrite")
-                                self.stop_recording_when_mem_full = False
-                            else:
-                                rprint("Datalog no overwrite")
-                                self.stop_recording_when_mem_full = True
-                                self.device_settings_have_been_read = True
+                        self.parse_get_settings_resp(cmd_response[1:])
                     case Cmd160.logListItem:
-                        logs = {}
-                        # XXX These two ops are just converting two
-                        #     bytes in to a 16bit int.. use struct module
-                        list_idx, list_total = struct.unpack_from(
-                            "!HH", self.pkt_buffer, 6
-                        )
-                        # There is bug in firmware v. 1.3.0. The
-                        # cmd160_logList command will append a
-                        # duplicate of the last long entry. For
-                        # example, if there are 3 recorded logs, the
-                        # command will repond that there are four: log
-                        # 0, log 1, log 2 and log 2 again.
-                        if list_idx == list_total:
-                            list_idx = 0
-                            list_total = 0
-                            logs = None
-                        else:
-                            log_list_item = LogListItem._make(
-                                LogListItemStruct.unpack_from(
-                                    self.pkt_buffer,
-                                    10,
-                                )
-                            )
-                            log_start_time = datetime_str(
-                                log_list_item.start_date,
-                                log_list_item.start_tod,
-                            )
-
-                            logs["interval"] = log_list_item.interval
-                            logs["count_entry"] = log_list_item.count_entry
-                            sample_interval = float(log_list_item.interval)
-                            if log_list_item.interval == 255:
-                                sample_interval = 10.0
-                                recording_length_in_sec = (
-                                    log_list_item.country_entry
-                                    * (sample_interval / 10.0)
-                                )
-                                duration = timedelta(seconds=recording_length_in_sec)
-                                logs["human_friendly_duration"] = str(duration)
-                                logs["sig"] = log_list_item.sig
-                                logs["start_time"] = log_start_time
-                                logs["duration"] = duration
-                                logs["start_block"] = log_list_item.start_block
-                                logs["count_block"] = log_list_item.count_block
-                                self.log_list_entries.append(logs)
-                                self.processing_log_list_entries_after_delay()
-                                self.new_log_list_item_received = True
+                        self.parse_log_list_item(cmd_response[2:])
                     case Cmd160.logReadBulk:
-                        addr, data_size = struct.unpack_from("!HB", 6)
-                        log_entry_size = LogEntryStruct.size + max(
-                            DataEntryStruct.size, Data2EntryStruct.size
-                        )
-                        self.log_read_bulk_count = data_size / log_entry_size
-                        if addr == 0 and data_size == 0:
-                            # End-of-data
-                            #
-                            self.log_read_bulk_count |= 0x1000000
-                            self.decode_log_bulk()
-                            self.log_read_bulk_count = 0
-                            self.log_bulk_recode_cnt = 0
-                            self.log_bulk_by_cnt = 0
-                            self.log_records = []
-                        else:
-                            # Looks like we get 5 log entries at a time.
-                            for loop_idx in range(5):
-                                idx = 10 + (loop_idx * log_entry_size)
-                                log_entry = LogEntry._make(
-                                    LogEntryStruct.unpack_from(self.pkt_buffer, idx)
-                                )
-                                if LogEntry.type == 1:
-                                    de = DataEntry._make(
-                                        DataEntryStruct.unpack_from(
-                                            self.pkt_buffer, idx + LogEntryStruct.size
-                                        )
-                                    )
-                                else:
-                                    de = Data2Entry._make(
-                                        Data2EntryStruct.unpack_from(
-                                            self.pkt_buffer, idx + LogEntryStruct.size
-                                        )
-                                    )
-                                    self.log_records.append((log_entry, de))
+                        self.parse_log_read_bulk(cmd_response[2:])
                     case Cmd160.logDelBlock:
                         if self.pkt_buffer[5] == 0x01:
                             rprint("Block data deleted")
@@ -599,6 +498,146 @@ class XGPS160(asyncio.Protocol):
                         self.rsp160_len = 0
                     case _:
                         rprint("huh.. unknown response code")
+
+    ####################################################################
+    #
+    def parse_get_settings_resp(self, settings):
+        """ """
+        rprint("XGPS160 settings")
+        self.cfg_gps_settings = settings[0]
+        rprint(f"GPS Settings: {self.cfg_gps_settings:>08b}")
+
+        # copy from objc .. we only need one of these two:
+        #
+        self.cfg_log_interval = settings[1]
+        self.log_update_rate = settings[1]
+        rprint(f"Log update rate is: {self.log_update_rate}")
+
+        # block and offset are little endian unsigned shorts
+        #
+        self.cfg_block, self.cfg_log_offset = struct.unpack_from(
+            "<HH",
+            settings,
+            2,
+        )
+
+        self.always_record_when_device_is_on = (
+            True if self.cfg_gps_settings & 0x40 else False
+        )
+        rprint("Datalog enabled: {self.always_record_when_device_is_on}")
+        self.stop_recording_when_mem_full = (
+            False if self.cfg_gps_settings & 0x80 else True
+        )
+        rprint("Datalog overwrite: {self.stop_recording_when_mem_full}")
+        self.device_settings_have_been_read = True
+
+    ####################################################################
+    #
+    def parse_log_list_item(self, log_list_item_data):
+        """
+        Keyword Arguments:
+        log_list_item_data --
+        """
+        rprint("XGPS160 log list items")
+        list_idx, list_total = struct.unpack_from(
+            "<HH",
+            log_list_item_data,
+            0,
+        )
+        rprint(f"  list index: {list_idx}, list total: {list_total}")
+
+        # There is bug in firmware v. 1.3.0. The cmd160_logList command will
+        # append a duplicate of the last long entry. For example, if there are
+        # 3 recorded logs, the command will repond that there are four: log 0,
+        # log 1, log 2 and log 2 again.
+        #
+        if list_idx == list_total:
+            list_idx = 0
+            list_total = 0
+            logs = None
+            return
+
+        logs = {}
+
+        log_list_item = LogListItem._make(
+            LogListItemStruct.unpack_from(
+                log_list_item_data,
+                4,
+            )
+        )
+        rprint(f"  log list item: {log_list_item}")
+
+        log_start_time = datetime_str(
+            log_list_item.start_date,
+            log_list_item.start_tod,
+        )
+        rprint(f"  log start time: {log_start_time}")
+
+        logs["interval"] = log_list_item.interval
+        logs["count_entry"] = log_list_item.count_entry
+        sample_interval = float(log_list_item.interval)
+        if log_list_item.interval == 255:
+            sample_interval = 10.0
+        recording_length_in_sec = log_list_item.country_entry * (sample_interval / 10.0)
+        duration = timedelta(seconds=recording_length_in_sec)
+        logs["human_friendly_duration"] = str(duration)
+        logs["sig"] = log_list_item.sig
+        logs["start_time"] = log_start_time
+        logs["duration"] = duration
+        logs["start_block"] = log_list_item.start_block
+        logs["count_block"] = log_list_item.count_block
+        self.log_list_entries.append(logs)
+        # self.processing_log_list_entries_after_delay()
+        self.new_log_list_item_received = True
+
+    ####################################################################
+    #
+    def parse_logs_read_bulk(self, bulk_logs_response):
+        """
+        Keyword Arguments:
+        bulk_logs_response --
+        """
+        # The address is an unsigned int, but it only uses the first 3 bytes
+        # from the start of the `bulk_logs_response`.. so we need to copy it
+        # adding that missing byte.
+        #
+        initial_data = "\x00" + bulk_logs_response[:4]
+        addr, data_size = struct.unpack_from("<IB", 0, initial_data)
+
+        log_entry_size = LogEntryStruct.size + max(
+            DataEntryStruct.size, Data2EntryStruct.size
+        )
+        self.log_read_bulk_count = data_size / log_entry_size
+        if addr == 0 and data_size == 0:
+            # End-of-data
+            #
+            self.log_read_bulk_count |= 0x1000000
+            # self.decode_log_bulk()
+            self.log_read_bulk_count = 0
+            self.log_bulk_recode_cnt = 0
+            self.log_bulk_by_cnt = 0
+            self.log_records = []
+        else:
+            # Looks like we get 5 log entries at a time.
+            for loop_idx in range(5):
+                # XXX can we do this with a `step` on the range?
+                idx = 10 + (loop_idx * log_entry_size)
+                log_entry = LogEntry._make(
+                    LogEntryStruct.unpack_from(bulk_logs_response, idx)
+                )
+                if LogEntry.type == 1:
+                    de = DataEntry._make(
+                        DataEntryStruct.unpack_from(
+                            bulk_logs_response, idx + LogEntryStruct.size
+                        )
+                    )
+                else:
+                    de = Data2Entry._make(
+                        Data2EntryStruct.unpack_from(
+                            bulk_logs_response, idx + LogEntryStruct.size
+                        )
+                    )
+                    self.log_records.append((log_entry, de))
 
     ####################################################################
     #
@@ -643,3 +682,31 @@ class XGPS160(asyncio.Protocol):
             else:
                 data_2_entry = log_entry.data
                 # ....
+
+    ####################################################################
+    #
+    def send_command(self, command: Cmd160, payload: bytes):
+        """
+        Keyword Arguments:
+        command --
+        payload --
+        """
+        message_header = struct.pack(
+            "<BBBB",
+            0x88,
+            0xEE,
+            len(payload) + 1,
+            command,
+        )
+        message = message_header + payload
+        checksum = struct.pack("<B", sum(message) & 255)
+
+        self.transport.write(message + checksum)
+
+    ####################################################################
+    #
+    def read_device_settings(self):
+        """
+
+        """
+        self.send_command(Cmd160.getSettings, b'')
