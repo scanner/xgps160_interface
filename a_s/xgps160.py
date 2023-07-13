@@ -173,21 +173,6 @@ class Cmd160(IntEnum):
 ########################################################################
 ########################################################################
 #
-class ParsingPacket(Enum):
-    """
-    When getting data from the XGPS160 we may be in three different kinds
-    of parsing states (or none of them). RX_BIN_SYNC = receiving binary,
-    RX_SYNC = receiving non-binary. NMEA = NMEA.
-    """
-
-    RX_BIN_SYNC = 1
-    RX_SYNC = 2
-    NMEA = 3
-
-
-########################################################################
-########################################################################
-#
 class XGPS160(asyncio.Protocol):
     """
     Mimicing the example XGPS160 interface project we have a class
@@ -216,10 +201,6 @@ class XGPS160(asyncio.Protocol):
 
         self.rcvd_buff = None
 
-        self.rx_bytes_count = 0
-        self.rx_bytes_total = 0
-        self.rx_messages_total = 0
-
         self.rsp160_cmd = 0
 
         self.rsp160_len = 0
@@ -240,17 +221,12 @@ class XGPS160(asyncio.Protocol):
         self.log_list_item_timer_started = False
         self.new_log_list_item_received = False
 
+        self.datalog_enabled = False
+        self.datalog_overwrite = False
+
         self.device_settings_have_been_read = False
 
         self.total_GPS_samples_in_log_entry = 0
-
-        # This is an event that we can wait on for data to be received. If we
-        # have not received enough data for a full command we just go back to
-        # waiting.
-        #
-        self.awaiting_data = asyncio.Event()
-
-        self.incoming_data = []
 
     ####################################################################
     #
@@ -277,6 +253,11 @@ class XGPS160(asyncio.Protocol):
         rprint("Connecting...")
         while not xgps_160.is_connected:
             await asyncio.sleep(0.1)
+
+        # Before we return control to the user fetch various data from the
+        # device.
+        #
+        await xgps_160.read_device_settings()
         return xgps_160
 
     ####################################################################
@@ -397,12 +378,9 @@ class XGPS160(asyncio.Protocol):
                     # Search for end of NEMA packet.
                     #
                     if b"\r\n" not in self.rcvd_buff:
-                        rprint(
-                            f"[red]Packet started with '$' but no '<cr><lf>' found: [/red][blue]{self.rcvd_buff}[/blue]"
-                        )
                         return
 
-                    nmea_packet = self.rcvd_buff[: self.rcvd_buff.find(b"\r\n")].decode(
+                    nmea_packet = self.rcvd_buff[:self.rcvd_buff.find(b"\r\n")].decode(
                         "utf-8"
                     )
                     try:
@@ -530,14 +508,14 @@ class XGPS160(asyncio.Protocol):
             2,
         )
 
-        self.always_record_when_device_is_on = (
+        self.datalog_enabled = (
             True if self.cfg_gps_settings & 0x40 else False
         )
-        rprint(f"Datalog enabled: {self.always_record_when_device_is_on}")
-        self.stop_recording_when_mem_full = (
-            False if self.cfg_gps_settings & 0x80 else True
+        rprint(f"Datalog enabled: {self.datalog_enabled}")
+        self.datalog_overwrite = (
+            True if self.cfg_gps_settings & 0x80 else False
         )
-        rprint(f"Datalog overwrite: {self.stop_recording_when_mem_full}")
+        rprint(f"Datalog overwrite: {self.datalog_overwrite}")
         self.device_settings_have_been_read = True
 
     ####################################################################
@@ -671,13 +649,31 @@ class XGPS160(asyncio.Protocol):
         # indicating the battery current supply and whether we are charging or
         # not. Battery voltage is not valid while charging.
         #
-        if "GPPWR" in nmea_packet:
-            nmea_packet = nmea_packet.split(",")
-            self.is_charging = True if nmea_packet[5] == "1" else False
-            if not self.is_charging:
-                self.battery_voltage = int(nmea_packet[1], 16)
-        else:
+        if "GPPWR" not in nmea_packet:
             self.nmea_messages.append(pynmea2.parse(nmea_packet))
+            return
+
+        # Parse the custom power settings
+        #
+        nmea_packet = nmea_packet.split(",")
+        self.is_charging = True if nmea_packet[5] == "1" else False
+
+        self.battery_voltage = int(nmea_packet[1], 16)
+        # if (vbat < kVolt350)
+        #     vbat = kVolt350;
+        # if (vbat > kVolt415)
+        #     vbat = kVolt415;
+
+        # bvolt = (float)vbat * 330.0f / 512.0f;
+        # batLevel = ((bvolt / 100.0f) - 3.5f) / 0.65f;
+
+        # if (batLevel > 1.0)
+        #     self.batteryVoltage = 1.0;
+        # else if (batLevel < 0)
+        #     self.batteryVoltage = 0.0;
+        # else
+        #     self.batteryVoltage = batLevel;
+
 
     ####################################################################
     #
@@ -714,7 +710,6 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    # NOTE: We should make this function async and have it await
     async def read_device_settings(self):
         """ """
         self.device_settings_have_been_read = False
@@ -723,3 +718,159 @@ class XGPS160(asyncio.Protocol):
             await asyncio.sleep(0.1)
 
         return self.cfg_gps_settings
+
+    ####################################################################
+    #
+    def start_logging(self):
+        """
+
+        """
+        pass
+
+    ####################################################################
+    #
+    def stop_logging(self):
+        """
+
+        """
+        pass
+
+    ####################################################################
+    #
+    def get_list_of_recorded_logs(self):
+        """
+
+        """
+        pass
+
+    ####################################################################
+    #
+    def get_gps_sample_data_for_log_list_item(self):
+        """
+
+        """
+        pass
+
+    ####################################################################
+    #
+    def delete_gps_sample_data_for_log_list_item(self):
+        """
+
+        """
+        pass
+
+    ####################################################################
+    #
+    def enter_log_access_mode(self):
+        """
+        It's much simpler to deal with log data information while the
+        device is not streaming GPS data. So the recommended practice is to
+        pause the NMEA stream output during the time that logs are being
+        accessed and manipulated.
+
+        XXX That may have been true in the objective c code but not sure if it
+            is true when running in python on a computer
+        """
+        pass
+
+    ####################################################################
+    #
+    def exit_log_access_mode(self):
+        """
+        Remember to tell the XGPS160 to resume sending NMEA data once you
+        are finished with the log data.
+        """
+        pass
+
+    ####################################################################
+    #
+    def datalog_overwrite(self, overwrite: bool):
+        """
+        If overwrite is True then when storage fills up the oldest log
+        records will be overwritten as new data comes in.
+
+        If overwrite is False then the device will stop writing data when the
+        storage is full.
+        """
+        pass
+
+    ####################################################################
+    #
+    def datalog_enable(self, enable: bool):
+        """
+        This enables or disables automatic data logging when the device
+        powers on.
+
+        Keyword Arguments:
+        enable: bool --
+        """
+        pass
+
+    ####################################################################
+    #
+    def check_for_adjustable_rate_logging(self) -> bool:
+        """
+
+        """
+        pass
+
+    ####################################################################
+    #
+    # XXX Instead of an int it should be an enum since only certain values are
+    #     allowed.
+    def set_logging_update_rate(self, rate: int):
+        """
+        Keyword Arguments:
+        rate: int --
+        """
+        # if ([self checkForAdjustableRateLogging] == NO) {
+        #     NSLog(@"Device firware version does not support adjustable logging rates. Firmware 1.3.5 or greater is required.");
+        #     NSLog(@"Firware updates are available through the XGPS160 Status Tool app.");
+        #     return NO;
+        # }
+
+        # /* rate can only be one of the following vales:
+        #  value  ->      device update rate
+        #  1               10 Hz
+        #  2               5 Hz
+        #  5               2 Hz
+        #  10              1 Hz
+        #  20              once every 2 seconds
+        #  30              once every 3 seconds
+        #  40              once every 4 seconds
+        #  50              once every 5 seconds
+        #  100             once every 10 seconds
+        #  120             once every 12 seconds
+        #  150             once every 15 seconds
+        #  200             once every 20 seconds
+        #  */
+
+        # if ((rate != 1) && (rate != 2) && (rate != 5) && (rate != 10) &&
+        #     (rate != 20) && (rate != 30) && (rate != 40) && (rate != 50) &&
+        #     (rate != 100) && (rate != 120) && (rate != 150) && (rate != 200))
+        # {
+        #     NSLog(@"%s. Invaid rate: %d", __FUNCTION__, rate);
+        #     return NO;
+        # }
+
+        # /* When in streaming mode, this command needs to be sent from a background thread in order to ensure there
+        #  is space available for an output stream. If the stream is paused, commands can be sent on the main thread.
+        #  */
+
+        # if (self.streamingMode)
+        # {
+        #     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT,0), ^{
+        #         unsigned char payloadArray[1] = {rate};
+        #         NSLog(@"%s. Streaming mode. Requested logging rate: %d", __FUNCTION__, rate);
+        #         [self sendCommandToDevice:cmd160_logInterval payloadDataArray:payloadArray lengthOfPayloadDataArray:sizeof(payloadArray)];
+        #     });
+        # }
+        # else
+        # {
+        #     NSLog(@"%s. log access mode. Requested logging rate: %d", __FUNCTION__, rate);
+        #     unsigned char payloadArray[1] = {rate};
+        #     [self sendCommandToDevice:cmd160_logInterval payloadDataArray:payloadArray lengthOfPayloadDataArray:sizeof(payloadArray)];
+        # }
+
+        # return YES;
+        pass

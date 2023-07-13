@@ -9,6 +9,7 @@ anything from it to see if I have the protocol correct.
 # system imports
 #
 import asyncio
+import time
 
 # 3rd party imports
 #
@@ -39,6 +40,8 @@ async def main(loop):
     #
     voltage = xgps.battery_voltage
     charging = xgps.is_charging
+    last_check = time.time()
+
     while True:
         if xgps.is_charging != charging:
             rprint(f"Charging: {xgps.is_charging}")
@@ -50,6 +53,19 @@ async def main(loop):
                 f"{len(xgps.nmea_messages)}"
             )
             voltage = xgps.battery_voltage
+
+        # Once a minute check the device settings
+        #
+        now = time.time()
+        if now - last_check > 60:
+            settings = await xgps.read_device_settings()
+            rprint(f"Device settings: {settings} ({xgps.cfg_gps_settings})")
+            rprint(f"Datalog enabled: {xgps.always_record_when_device_is_on}")
+            rprint(f"Datalog overwrite: {xgps.stop_recording_when_mem_full}")
+            rprint(f"Config block: {xgps.cfg_block}, log offset: {xgps.cfg_log_offset}")
+            rprint(f"Log update rate: {xgps.log_update_rate}")
+            last_check = now
+
         await asyncio.sleep(1)
 
 
