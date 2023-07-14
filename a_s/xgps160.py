@@ -28,6 +28,13 @@ install_tb(show_locals=True)
 DEVICES_DIR = "/dev/"
 XGPS_SERIAL_PATERN = "tty.XGPS160*"
 
+# Battery level conversion constants. See `parse_nmea()` for how these are
+# used.
+#
+K_VOLT_415 = 644
+K_VOLT_350 = 543
+
+
 # Keep up to 10,000 NMEA messages in memory. If we receive more messages than
 # that the oldest messages are tossed.
 #
@@ -88,12 +95,12 @@ def get_lat_lon_32bit(buf: bytes) -> float:
 ####################################################################
 #
 def datetime_str(date_bin: int, time_of_day: int) -> datetime:
-    year = 2012 + date_bin / 372
-    month = 1 + (date_bin % 372) / 31
+    year = 2012 + (date_bin // 372)
+    month = 1 + (date_bin % 372) // 31
     day = 1 + (date_bin % 31)
 
-    hour = time_of_day / 3600
-    minute = (time_of_day % 3600) / 60
+    hour = time_of_day // 3600
+    minute = (time_of_day % 3600) // 60
     second = time_of_day % 60
 
     return datetime(
@@ -123,11 +130,32 @@ def xgps_serialport():
 ########################################################################
 ########################################################################
 #
-LogListItemStruct = struct.Struct("!BBHIHHH")
+LogListItemStruct = struct.Struct("<BBHIHHH")
 LogListItem = namedtuple(
     "LogListItem",
     "sig interval start_date start_tod start_block count_entry count_block",
 )
+
+
+########################################################################
+########################################################################
+#
+class LoggingRate(IntEnum):
+    """
+    Logging rate can only be one of the following enumerations
+    """
+    HZ_10 = 1      # 10hz
+    HZ_05 = 2      # 5hz
+    HZ_02 = 5      # 2hz
+    HZ_01 = 10     # 1hz -- once every second
+    SEC_2 = 20     # once every 2 seconds
+    SEC_3 = 30     # once every 3 seconds
+    SEC_4 = 40     # once every 4 seconds
+    SEC_5 = 50     # once every 5 seconds
+    SEC_10 = 100   # once every 10 seconds
+    SEC_12 = 120   # once every 12 seconds
+    SEC_15 = 150   # once every 15 seconds
+    SEC_20 = 200   # once every 20 seconds
 
 
 ########################################################################
@@ -348,7 +376,7 @@ class XGPS160(asyncio.Protocol):
                     cs = sum(self.rcvd_buff[: cmd_resp_length + 3]) & 255
                     if checksum == cs:
                         try:
-                            cmd_response = self.rcvd_buff[3:cmd_resp_length + 3]
+                            cmd_response = self.rcvd_buff[3 : cmd_resp_length + 3]
                             rprint(
                                 f"[bold][red]**[/red][/bold] command response length: {cmd_resp_length}"
                             )
@@ -367,7 +395,7 @@ class XGPS160(asyncio.Protocol):
                     # response attempt to parse it. Otherwise we are done with
                     # this packet.
                     #
-                    self.rcvd_buff = self.rcvd_buff[cmd_resp_length + 4:]
+                    self.rcvd_buff = self.rcvd_buff[cmd_resp_length + 4 :]
                     if self.rcvd_buff:
                         continue
                     return
@@ -380,7 +408,7 @@ class XGPS160(asyncio.Protocol):
                     if b"\r\n" not in self.rcvd_buff:
                         return
 
-                    nmea_packet = self.rcvd_buff[:self.rcvd_buff.find(b"\r\n")].decode(
+                    nmea_packet = self.rcvd_buff[: self.rcvd_buff.find(b"\r\n")].decode(
                         "utf-8"
                     )
                     try:
@@ -508,13 +536,9 @@ class XGPS160(asyncio.Protocol):
             2,
         )
 
-        self.datalog_enabled = (
-            True if self.cfg_gps_settings & 0x40 else False
-        )
+        self.datalog_enabled = True if self.cfg_gps_settings & 0x40 else False
         rprint(f"Datalog enabled: {self.datalog_enabled}")
-        self.datalog_overwrite = (
-            True if self.cfg_gps_settings & 0x80 else False
-        )
+        self.datalog_overwrite = True if self.cfg_gps_settings & 0x80 else False
         rprint(f"Datalog overwrite: {self.datalog_overwrite}")
         self.device_settings_have_been_read = True
 
@@ -525,7 +549,8 @@ class XGPS160(asyncio.Protocol):
         Keyword Arguments:
         log_list_item_data --
         """
-        rprint("XGPS160 log list items")
+        rprint(f"XGPS160 log list item: {repr(log_list_item_data)}")
+
         list_idx, list_total = struct.unpack_from(
             "<HH",
             log_list_item_data,
@@ -533,6 +558,8 @@ class XGPS160(asyncio.Protocol):
         )
         rprint(f"  list index: {list_idx}, list total: {list_total}")
 
+        # XXX We have firmware v3.7.3 ... maybe we can skip this check?
+        #
         # There is bug in firmware v. 1.3.0. The cmd160_logList command will
         # append a duplicate of the last long entry. For example, if there are
         # 3 recorded logs, the command will repond that there are four: log 0,
@@ -567,12 +594,20 @@ class XGPS160(asyncio.Protocol):
             sample_interval = 10.0
         recording_length_in_sec = log_list_item.country_entry * (sample_interval / 10.0)
         duration = timedelta(seconds=recording_length_in_sec)
+
+        # XXX why do we not just add some more fields to the LogListItemStruct
+        #     and add it to the array instead of making a dict and adding that.
+        #
+        # XXX Is the .sig unique? Can we use it to search for specific entries
+        #     in the log_list_entries list?
+        #
         logs["human_friendly_duration"] = str(duration)
         logs["sig"] = log_list_item.sig
         logs["start_time"] = log_start_time
         logs["duration"] = duration
         logs["start_block"] = log_list_item.start_block
         logs["count_block"] = log_list_item.count_block
+        rprint(f"Adding log list entry: {logs}")
         self.log_list_entries.append(logs)
         # self.processing_log_list_entries_after_delay()
         self.new_log_list_item_received = True
@@ -658,44 +693,36 @@ class XGPS160(asyncio.Protocol):
         nmea_packet = nmea_packet.split(",")
         self.is_charging = True if nmea_packet[5] == "1" else False
 
+        # ??? the objC code looks for NMEA sentences with '@' in them, and we
+        # are looking at GPPWR ones. The translation of the battery voltage
+        # does not correlated.
+        #
+        # NOTE: 1280 is 96%
         self.battery_voltage = int(nmea_packet[1], 16)
-        # if (vbat < kVolt350)
-        #     vbat = kVolt350;
-        # if (vbat > kVolt415)
-        #     vbat = kVolt415;
-
-        # bvolt = (float)vbat * 330.0f / 512.0f;
-        # batLevel = ((bvolt / 100.0f) - 3.5f) / 0.65f;
-
-        # if (batLevel > 1.0)
-        #     self.batteryVoltage = 1.0;
-        # else if (batLevel < 0)
-        #     self.batteryVoltage = 0.0;
-        # else
-        #     self.batteryVoltage = batLevel;
-
 
     ####################################################################
     #
     def decode_log_bulk(self):
         """ """
         self.log_data_samples = []
-        for log_entry, data_entry in self.log_records:
-            if log_entry.type == 0:
-                data_entry = log_entry.data  # Union.. dataentry vs data2entry
-                # ....
-            else:
-                data_2_entry = log_entry.data
-                # ....
+        for idx, (log_entry, data_entry) in enumerate(self.log_records):
+            rprint(f"{idx:02d}: {log_entry}")
+            # if log_entry.type == 0:
+            #     data_entry = log_entry.data  # Union.. dataentry vs data2entry
+            #     # ....
+            # else:
+            #     data_2_entry = log_entry.data
+            #     # ....
 
     ####################################################################
     #
-    def send_command(self, command: Cmd160, payload: bytes):
+    def send_command(self, command: Cmd160, payload: Optional[bytes] = None):
         """
         Keyword Arguments:
         command --
         payload --
         """
+        payload = b"" if payload is None else payload
         message_header = struct.pack(
             "<BBBB",
             0x88,
@@ -722,42 +749,60 @@ class XGPS160(asyncio.Protocol):
     ####################################################################
     #
     def start_logging(self):
-        """
-
-        """
+        """ """
         pass
 
     ####################################################################
     #
     def stop_logging(self):
-        """
-
-        """
+        """ """
         pass
 
     ####################################################################
     #
-    def get_list_of_recorded_logs(self):
+    async def get_list_of_recorded_logs(self):
         """
+        Gets the list of recorded log records from the device (this is not
+        the actual logged data, it is the list of fixed size items that contain
+        the log data.)
+        """
+        self.log_list_entries = []
+        self.new_log_list_item_received = False
+        self.send_command(Cmd160.logList)
 
-        """
-        pass
+        while not self.new_log_list_item_received:
+            await asyncio.sleep(0.1)
+        return self.log_list_entries
 
     ####################################################################
     #
-    def get_gps_sample_data_for_log_list_item(self):
-        """
+    def get_gps_sample_data_for_log_list_item(self, log_list_item):
+        """ """
+        self.log_data_samples = []
+        start_block = log_list_item["start_block"]
+        count_block = log_list_item["count_block"]
 
-        """
-        pass
+        payload = struct.pack("<HH", start_block, count_block)
+        self.send_command(Cmd160.log_read_bulk, payload)
 
     ####################################################################
     #
-    def delete_gps_sample_data_for_log_list_item(self):
-        """
+    def delete_gps_sample_data_for_log_list_item(self, log_list_item):
+        """ """
+        start_block = log_list_item["start_block"]
+        count_block = log_list_item["count_block"]
 
-        """
-        pass
+        payload = struct.pack("<HH", start_block, count_block)
+        self.send_command(Cmd160.log_del_block, payload)
+
+        # find log_list_item in self.log_list_entries and delete it.
+        #
+        self.log_list_entries = [
+            x
+            for x in self.log_list_entries
+            if not (x["start_block"] == start_block and
+                    x["count_block"] == count_block)
+        ]
 
     ####################################################################
     #
@@ -771,7 +816,9 @@ class XGPS160(asyncio.Protocol):
         XXX That may have been true in the objective c code but not sure if it
             is true when running in python on a computer
         """
-        pass
+        self.send_command(Cmd160.streamStop)
+        self.streaming_mode = False
+        self.get_list_of_recorded_logs()
 
     ####################################################################
     #
@@ -780,7 +827,8 @@ class XGPS160(asyncio.Protocol):
         Remember to tell the XGPS160 to resume sending NMEA data once you
         are finished with the log data.
         """
-        pass
+        self.send_command(Cmd160.streamResume)
+        self.streaming_mode = True
 
     ####################################################################
     #
@@ -792,7 +840,10 @@ class XGPS160(asyncio.Protocol):
         If overwrite is False then the device will stop writing data when the
         storage is full.
         """
-        pass
+        if overwrite:
+            self.send_command(Cmd160.logOWEnable)
+        else:
+            self.send_command(Cmd160.logOWDisable)
 
     ####################################################################
     #
@@ -804,73 +855,39 @@ class XGPS160(asyncio.Protocol):
         Keyword Arguments:
         enable: bool --
         """
-        pass
+        if enable:
+            self.send_command(Cmd160.logEnable)
+        else:
+            self.send_command(Cmd160.logDisable)
 
     ####################################################################
     #
     def check_for_adjustable_rate_logging(self) -> bool:
         """
+        The firmware version of my device is 3.7.3.. since I am using a
+        serial interface and nothing else I have not used bluetooth to probe
+        the device's firmware so just going to hard code this.. for my device
+        this will always be True.
 
+        XXX Add support to probe bluetooth device for firmware version.
         """
-        pass
+        return True
 
     ####################################################################
     #
     # XXX Instead of an int it should be an enum since only certain values are
     #     allowed.
-    def set_logging_update_rate(self, rate: int):
+    def set_logging_update_rate(self, rate: LoggingRate):
         """
         Keyword Arguments:
         rate: int --
         """
-        # if ([self checkForAdjustableRateLogging] == NO) {
-        #     NSLog(@"Device firware version does not support adjustable logging rates. Firmware 1.3.5 or greater is required.");
-        #     NSLog(@"Firware updates are available through the XGPS160 Status Tool app.");
-        #     return NO;
-        # }
+        # Must be at least firmware version 1.3.5 or greather.
+        #
+        if not self.check_for_adjustable_rate_logging:
+            return False
 
-        # /* rate can only be one of the following vales:
-        #  value  ->      device update rate
-        #  1               10 Hz
-        #  2               5 Hz
-        #  5               2 Hz
-        #  10              1 Hz
-        #  20              once every 2 seconds
-        #  30              once every 3 seconds
-        #  40              once every 4 seconds
-        #  50              once every 5 seconds
-        #  100             once every 10 seconds
-        #  120             once every 12 seconds
-        #  150             once every 15 seconds
-        #  200             once every 20 seconds
-        #  */
+        payload = struct.pack("<B", rate)
 
-        # if ((rate != 1) && (rate != 2) && (rate != 5) && (rate != 10) &&
-        #     (rate != 20) && (rate != 30) && (rate != 40) && (rate != 50) &&
-        #     (rate != 100) && (rate != 120) && (rate != 150) && (rate != 200))
-        # {
-        #     NSLog(@"%s. Invaid rate: %d", __FUNCTION__, rate);
-        #     return NO;
-        # }
-
-        # /* When in streaming mode, this command needs to be sent from a background thread in order to ensure there
-        #  is space available for an output stream. If the stream is paused, commands can be sent on the main thread.
-        #  */
-
-        # if (self.streamingMode)
-        # {
-        #     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT,0), ^{
-        #         unsigned char payloadArray[1] = {rate};
-        #         NSLog(@"%s. Streaming mode. Requested logging rate: %d", __FUNCTION__, rate);
-        #         [self sendCommandToDevice:cmd160_logInterval payloadDataArray:payloadArray lengthOfPayloadDataArray:sizeof(payloadArray)];
-        #     });
-        # }
-        # else
-        # {
-        #     NSLog(@"%s. log access mode. Requested logging rate: %d", __FUNCTION__, rate);
-        #     unsigned char payloadArray[1] = {rate};
-        #     [self sendCommandToDevice:cmd160_logInterval payloadDataArray:payloadArray lengthOfPayloadDataArray:sizeof(payloadArray)];
-        # }
-
-        # return YES;
-        pass
+        self.send_command(Cmd160.logInterval, payload)
+        return True
