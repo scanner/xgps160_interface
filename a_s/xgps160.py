@@ -9,8 +9,8 @@ import asyncio
 import struct
 import pathlib
 import traceback
+import enum
 from typing import Optional
-from enum import IntEnum, Enum
 from datetime import datetime, timedelta, UTC
 from collections import namedtuple, deque
 
@@ -20,6 +20,7 @@ import pynmea2
 import serial_asyncio
 from rich.console import Console
 from rich import print as rprint
+from rich.pretty import pprint
 from rich.traceback import install as install_tb
 
 
@@ -140,7 +141,26 @@ LogListItem = namedtuple(
 ########################################################################
 ########################################################################
 #
-class LoggingRate(IntEnum):
+class GPSSettings(enum.IntFlag):
+    """
+    The GPS Settings information is a single unsigned byte which has two flags:
+    DatalogEnabled and DatalogOverwrite.
+
+    NOTE: We are following the ObjC source code but we have never gotten back
+          any different values from the GPS for settings no matter what the
+          display indicates.
+          (We always get back `00010100`. Positions 0x40 and 0x80 are never set.
+    """
+    # If set then device will record to the datalog when it powers up
+    datalog_enabled = 0x40
+    # If set then when datalog memory fills up, overwrite the oldest entries.
+    datalog_overwrite = 0x80
+
+
+########################################################################
+########################################################################
+#
+class LoggingRate(enum.IntEnum):
     """
     Logging rate can only be one of the following enumerations
     """
@@ -161,11 +181,10 @@ class LoggingRate(IntEnum):
 ########################################################################
 ########################################################################
 #
-class Cmd160(IntEnum):
+class Cmd160(enum.IntEnum):
     """
     The possible commands for the XGPS160.
     """
-
     ack = 0
     nack = 1
     response = 2
@@ -278,7 +297,6 @@ class XGPS160(asyncio.Protocol):
             baudrate=115200,
         )
 
-        rprint("Connecting...")
         while not xgps_160.is_connected:
             await asyncio.sleep(0.1)
 
@@ -291,7 +309,6 @@ class XGPS160(asyncio.Protocol):
     ####################################################################
     #
     def connection_made(self, transport):
-        rprint("Connected!")
         self.transport = transport
         self.is_connected = True
 
@@ -371,19 +388,21 @@ class XGPS160(asyncio.Protocol):
                     #
                     checksum = self.rcvd_buff[cmd_resp_length + 3]
                     cs = sum(self.rcvd_buff[: cmd_resp_length + 3]) & 255
+                    cmd_response = self.rcvd_buff[3 : cmd_resp_length + 3]
+
+                    # rprint(
+                    #     f"header: {self.rcvd_buff[:3].hex(':')}, msg len: "
+                    #     f"{cmd_resp_length}, msg: {cmd_response.hex(':')}"
+                    # )
+
                     if checksum == cs:
                         try:
-                            cmd_response = self.rcvd_buff[3 : cmd_resp_length + 3]
-                            rprint(
-                                f"[bold][red]**[/red][/bold] command response length: {cmd_resp_length}"
-                            )
-                            rprint(f"   received buffer: {repr(self.rcvd_buff)}")
-                            rprint(f"   command response: {repr(cmd_response)}")
                             self.parse_command_response(cmd_response)
                         except Exception as exc:
                             traceback.print_exc()
                             rprint(
-                                f"Unable to parse command response {repr(cmd_response)}: {exc}"
+                                "Unable to parse command response "
+                                f"{repr(cmd_response.hex(':'))}: {exc}"
                             )
                     else:
                         rprint(f"Checksum error: {cs} != {checksum}")
@@ -392,7 +411,7 @@ class XGPS160(asyncio.Protocol):
                     # response attempt to parse it. Otherwise we are done with
                     # this packet.
                     #
-                    self.rcvd_buff = self.rcvd_buff[cmd_resp_length + 4 :]
+                    self.rcvd_buff = self.rcvd_buff[cmd_resp_length + 4:]
                     if self.rcvd_buff:
                         continue
                     return
@@ -404,10 +423,9 @@ class XGPS160(asyncio.Protocol):
                     #
                     if b"\r\n" not in self.rcvd_buff:
                         return
+                    crlf_pos = self.rcvd_buff.find(b"\r\n")
+                    nmea_packet = self.rcvd_buff[:crlf_pos].decode("utf-8")
 
-                    nmea_packet = self.rcvd_buff[: self.rcvd_buff.find(b"\r\n")].decode(
-                        "utf-8"
-                    )
                     try:
                         self.parse_nmea(nmea_packet)
                     except pynmea2.nmea.SentenceTypeError as exc:
@@ -418,7 +436,7 @@ class XGPS160(asyncio.Protocol):
                     # If there is any self.rcvd_buff left to parse, try parsing
                     # it, otherwise we are done with this packet.
                     #
-                    self.rcvd_buff = self.rcvd_buff[self.rcvd_buff.find(b"\r\n") + 2 :]
+                    self.rcvd_buff = self.rcvd_buff[crlf_pos + 2:]
                     if len(self.rcvd_buff):
                         continue
                     return
@@ -442,11 +460,11 @@ class XGPS160(asyncio.Protocol):
 
                     if bin_pos == -1:
                         self.rcvd_buff = self.rcvd_buff[nmea_pos:]
-                        rprint("forwarding to $")
+                        rprint("truncating up to first $")
                         continue
                     if nmea_pos == -1:
                         self.rcvd_buff = self.rcvd_buff[bin_pos:]
-                        rprint("forwarding to 0x88")
+                        rprint("truncating up to first 0x88")
                         continue
                     self.rcvd_buff = self.rcvd_buff[min(bin_pos, nmea_pos) :]
                     continue
@@ -480,8 +498,6 @@ class XGPS160(asyncio.Protocol):
     #
     def parse_command_response(self, cmd_response: bytes):
         """ """
-        rprint(f"parse_command_response: {repr(cmd_response)}")
-
         cmd = cmd_response[0]
         match cmd:
             case Cmd160.ack | Cmd160.nack:
@@ -491,6 +507,7 @@ class XGPS160(asyncio.Protocol):
             case Cmd160.fwRsp:
 
                 sub_cmd = cmd_response[1]
+                rprint(f"* [blue][bold]{Cmd160(sub_cmd).name}[/bold][/blue]")
                 match sub_cmd:
                     case Cmd160.getSettings:
                         self.parse_get_settings_resp(cmd_response[1:])
@@ -510,12 +527,14 @@ class XGPS160(asyncio.Protocol):
                         self.rsp160_len = 0
                     case _:
                         rprint("huh.. unknown response code")
+            case _:
+                rprint("[red]Unknown command {cmd}[/red]")
 
     ####################################################################
     #
     def parse_get_settings_resp(self, settings):
         """ """
-        rprint("XGPS160 settings")
+        rprint(f"settings data: {settings.hex(':')}")
         self.cfg_gps_settings = settings[0]
         rprint(f"GPS Settings: {self.cfg_gps_settings:>08b}")
 
@@ -534,81 +553,90 @@ class XGPS160(asyncio.Protocol):
         )
 
         self.datalog_enabled = True if self.cfg_gps_settings & 0x40 else False
-        rprint(f"Datalog enabled: {self.datalog_enabled}")
         self.datalog_overwrite = True if self.cfg_gps_settings & 0x80 else False
-        rprint(f"Datalog overwrite: {self.datalog_overwrite}")
         self.device_settings_have_been_read = True
 
     ####################################################################
     #
-    def parse_log_list_item(self, log_list_item_data):
+    def parse_log_list_item(self, log_item_data):
         """
         Keyword Arguments:
-        log_list_item_data --
+        log_item_data --
         """
-        rprint(f"XGPS160 log list item: {repr(log_list_item_data)}")
+        rprint(f"log item, len: {len(log_item_data)}: {log_item_data.hex(':')}")
 
         list_idx, list_total = struct.unpack_from(
-            # "<HH",
             ">HH",
-            log_list_item_data,
-            0,
+            log_item_data,
+            1,
         )
-        rprint(f"  list index: {list_idx}, list total: {list_total}")
 
-        # XXX We have firmware v3.7.3 ... maybe we can skip this check?
+        # If the length of the data we got back is less than 18 bytes long then
+        # we do not have enough data to unpack the log list item. Return.
+        # NOTE: This seems to consistently happen as the last packet after all
+        # of the other log entries have been received. So we are going to use
+        # this as our "end packet"
         #
-        # There is bug in firmware v. 1.3.0. The cmd160_logList command will
-        # append a duplicate of the last long entry. For example, if there are
-        # 3 recorded logs, the command will repond that there are four: log 0,
-        # log 1, log 2 and log 2 again.
-        #
-        if list_idx == list_total:
-            list_idx = 0
-            list_total = 0
-            logs = None
+        if len(log_item_data) < 18:
+            self.new_log_list_item_received = True
             return
 
-        logs = {}
+        log = {}
 
-        log_list_item = LogListItem._make(
+        log_item = LogListItem._make(
             LogListItemStruct.unpack_from(
-                log_list_item_data,
-                4,
+                log_item_data,
+                # 4,
+                5,
             )
         )
-        rprint(f"  log list item: {log_list_item}")
+        # rprint(f"  {log_item}")
 
         log_start_time = datetime_str(
-            log_list_item.start_date,
-            log_list_item.start_tod,
+            log_item.start_date,
+            log_item.start_tod,
         )
-        rprint(f"  log start time: {log_start_time}")
+        # rprint(f"  log start time: {log_start_time}")
 
-        logs["interval"] = log_list_item.interval
-        logs["count_entry"] = log_list_item.count_entry
-        sample_interval = float(log_list_item.interval)
-        if log_list_item.interval == 255:
+        log["interval"] = log_item.interval
+        log["count_entry"] = log_item.count_entry
+        sample_interval = float(log_item.interval)
+        if log_item.interval == 255:
             sample_interval = 10.0
-        recording_length_in_sec = log_list_item.country_entry * (sample_interval / 10.0)
+        recording_length_in_sec = (
+            log_item.count_entry * (sample_interval / 10.0)
+        )
         duration = timedelta(seconds=recording_length_in_sec)
 
-        # XXX why do we not just add some more fields to the LogListItemStruct
-        #     and add it to the array instead of making a dict and adding that.
+        # NOTE: We combine "start date" and "start time"'s from the objC code
+        #       in to the obvious python "datetime" class.
         #
-        # XXX Is the .sig unique? Can we use it to search for specific entries
-        #     in the log_list_entries list?
-        #
-        logs["human_friendly_duration"] = str(duration)
-        logs["sig"] = log_list_item.sig
-        logs["start_time"] = log_start_time
-        logs["duration"] = duration
-        logs["start_block"] = log_list_item.start_block
-        logs["count_block"] = log_list_item.count_block
-        rprint(f"Adding log list entry: {logs}")
-        self.log_list_entries.append(logs)
+        # LogDic items from objC code:
+        # - DeviceStartDate
+        # - DeviceStartTime
+        # - DevicerecordingStart
+        # - humanFriendlyStartDate
+        # - humanFriendlyStartTime
+        # - recordingState
+        # - interval
+        # - countEntry
+        # - humanFriendlyDuration
+        # - sig
+        # - startDate
+        # - startTod
+        # - startBlock
+        # - countBlock
+        log["human_friendly_duration"] = str(duration)
+        log["sig"] = log_item.sig
+        log["start_date"] = log_item.start_date
+        log["start_tod"] = log_item.start_tod
+        log["start_time"] = log_start_time
+        log["duration"] = duration
+        log["start_block"] = log_item.start_block
+        log["count_block"] = log_item.count_block
+        self.log_list_entries.append(log)
+        pprint(log)
         # self.processing_log_list_entries_after_delay()
-        self.new_log_list_item_received = True
 
     ####################################################################
     #

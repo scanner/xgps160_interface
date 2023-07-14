@@ -37,8 +37,18 @@ async def main(loop):
     rprint(f"Device settings: {settings}")
 
     await xgps.get_list_of_recorded_logs()
-    rprint(f"log list entries: {xgps.log_list_entries}")
+    rprint(f"number of log list entries: {len(xgps.log_list_entries)}")
+    rprint(f"percent storage used: {xgps.get_used_storage_percent()}")
 
+    # Print out difference between "start_date"'s
+    #
+    # first_start = None
+    # for idx, log_item in enumerate(xgps.log_list_entries):
+    #     if first_start is not None:
+    #         rprint(f"{idx:02}: {log_item['start_date']-first_start}")
+    #     first_start = log_item["start_date"]
+
+    # print out differences in
     # For now loop forever..
     #
     voltage = xgps.battery_voltage
