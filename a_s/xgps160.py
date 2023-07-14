@@ -137,6 +137,15 @@ LogListItem = namedtuple(
     "sig interval start_date start_tod start_block count_entry count_block",
 )
 
+########################################################################
+########################################################################
+#
+SettingsStruct = struct.Struct("<BBHH")
+Settings = namedtuple(
+    "Settings",
+    "settings log_interval block offset",
+)
+
 
 ########################################################################
 ########################################################################
@@ -164,18 +173,18 @@ class LoggingRate(enum.IntEnum):
     """
     Logging rate can only be one of the following enumerations
     """
-    HZ_10 = 1      # 10hz
-    HZ_05 = 2      # 5hz
-    HZ_02 = 5      # 2hz
-    HZ_01 = 10     # 1hz -- once every second
-    SEC_2 = 20     # once every 2 seconds
-    SEC_3 = 30     # once every 3 seconds
-    SEC_4 = 40     # once every 4 seconds
-    SEC_5 = 50     # once every 5 seconds
-    SEC_10 = 100   # once every 10 seconds
-    SEC_12 = 120   # once every 12 seconds
-    SEC_15 = 150   # once every 15 seconds
-    SEC_20 = 200   # once every 20 seconds
+    SEC_00_1 = 1      # 10hz
+    SEC_00_2 = 2      # 5hz
+    SEC_00_5 = 5      # 2hz
+    SEC_01_0 = 10     # 1hz -- once every second
+    SEC_02_0 = 20     # once every 2 seconds
+    SEC_03_0 = 30     # once every 3 seconds
+    SEC_04_0 = 40     # once every 4 seconds
+    SEC_05_0 = 50     # once every 5 seconds
+    SEC_10_0 = 100    # once every 10 seconds
+    SEC_12_0 = 120    # once every 12 seconds
+    SEC_15_0 = 150    # once every 15 seconds
+    SEC_20_0 = 200    # once every 20 seconds
 
 
 ########################################################################
@@ -532,25 +541,17 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def parse_get_settings_resp(self, settings):
+    def parse_get_settings_resp(self, settings_data):
         """ """
-        rprint(f"settings data: {settings.hex(':')}")
-        self.cfg_gps_settings = settings[0]
-        rprint(f"GPS Settings: {self.cfg_gps_settings:>08b}")
+        rprint(f"settings data: {settings_data.hex(':')}")
+        settings = Settings._make(SettingsStruct.unpack_from(settings_data, 1))
 
-        # copy from objc .. we only need one of these two:
-        #
-        self.cfg_log_interval = settings[1]
-        self.log_update_rate = settings[1]
-        rprint(f"Log update rate is: {self.log_update_rate}")
-
-        # block and offset are little endian unsigned shorts
-        #
-        self.cfg_block, self.cfg_log_offset = struct.unpack_from(
-            "<HH",
-            settings,
-            2,
-        )
+        rprint(f"settings: {settings.settings:>08b}, log interval: {settings.log_interval}, cfg block: {settings.block}, log offset: {settings.offset}")
+        self.cfg_gps_settings = settings.settings
+        self.cfg_log_interval = settings.log_interval
+        self.log_update_rate = settings.log_interval
+        self.cfg_block = settings.block
+        self.cfg_log_offset = settings.offset
 
         self.datalog_enabled = True if self.cfg_gps_settings & 0x40 else False
         self.datalog_overwrite = True if self.cfg_gps_settings & 0x80 else False
@@ -598,11 +599,10 @@ class XGPS160(asyncio.Protocol):
         )
         # rprint(f"  log start time: {log_start_time}")
 
-        log["interval"] = log_item.interval
-        log["count_entry"] = log_item.count_entry
         sample_interval = float(log_item.interval)
         if log_item.interval == 255:
             sample_interval = 10.0
+
         recording_length_in_sec = (
             log_item.count_entry * (sample_interval / 10.0)
         )
@@ -626,6 +626,8 @@ class XGPS160(asyncio.Protocol):
         # - startTod
         # - startBlock
         # - countBlock
+        log["interval"] = log_item.interval
+        log["data_points"] = log_item.count_entry
         log["human_friendly_duration"] = str(duration)
         log["sig"] = log_item.sig
         log["start_date"] = log_item.start_date

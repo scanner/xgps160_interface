@@ -67,17 +67,17 @@ async def main(loop):
             )
             voltage = xgps.battery_voltage
 
-        # Once a minute check the device settings
+        # Once a minute check the device settings. Print if they have changed.
         #
-        # now = time.time()
-        # if now - last_check > 60:
-        #     await xgps.read_device_settings()
-        #     rprint(f"Device settings: {xgps.cfg_gps_settings:>08b}")
-        #     rprint(f"Datalog enabled: {xgps.datalog_enabled}")
-        #     rprint(f"Datalog overwrite: {xgps.datalog_overwrite}")
-        #     rprint(f"Config block: {xgps.cfg_block}, log offset: {xgps.cfg_log_offset}")
-        #     rprint(f"Log update rate: {xgps.log_update_rate}")
-        #     last_check = now
+        now = time.time()
+        if now - last_check > 60:
+            await xgps.read_device_settings()
+            rprint(f"Device settings: {xgps.cfg_gps_settings:>08b}")
+            rprint(f"Datalog enabled: {xgps.datalog_enabled}")
+            rprint(f"Datalog overwrite: {xgps.datalog_overwrite}")
+            rprint(f"Config block: {xgps.cfg_block}, log offset: {xgps.cfg_log_offset}")
+            rprint(f"Log update rate: {xgps.log_update_rate}")
+            last_check = now
 
         await asyncio.sleep(1)
 
