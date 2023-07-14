@@ -227,7 +227,7 @@ class XGPS160(asyncio.Protocol):
 
         self.nmea_messages = deque(maxlen=max_nmea_msgs)
 
-        self.rcvd_buff = None
+        self.rcvd_buff = b''
 
         self.rsp160_cmd = 0
 
@@ -318,14 +318,11 @@ class XGPS160(asyncio.Protocol):
               we have a complete message just going to assume we get the whole
               message.
         """
-        # If there is data in the received buffer then append the data we just
-        # received to that buffer.
+        # All new data gets concatenated to our existing rcvd_buff. Not the
+        # most efficient way to handle bytes of data comming in, but it is
+        # representationally simpler code.
         #
-        if self.rcvd_buff:
-            self.rcvd_buff += data
-            rprint(f"data_received (appended): {repr(self.rcvd_buff)}")
-        else:
-            self.rcvd_buff = data
+        self.rcvd_buff += data
 
         # Parse packets out of the data we have received until there is no more
         # data left to parse.
@@ -435,7 +432,7 @@ class XGPS160(asyncio.Protocol):
                         rprint(
                             f"No command characters in packet: {repr(self.rcvd_buff)}"
                         )
-                        self.rcvd_buff = None
+                        self.rcvd_buff = b''
                         return
 
                     # Truncate to the first command byte we have.
@@ -492,7 +489,7 @@ class XGPS160(asyncio.Protocol):
                 return
 
             case Cmd160.fwRsp:
-                rprint("Command fw response")
+
                 sub_cmd = cmd_response[1]
                 match sub_cmd:
                     case Cmd160.getSettings:
@@ -552,7 +549,8 @@ class XGPS160(asyncio.Protocol):
         rprint(f"XGPS160 log list item: {repr(log_list_item_data)}")
 
         list_idx, list_total = struct.unpack_from(
-            "<HH",
+            # "<HH",
+            ">HH",
             log_list_item_data,
             0,
         )
