@@ -10,7 +10,7 @@ import struct
 import pathlib
 import traceback
 import enum
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timedelta, UTC
 from collections import namedtuple, deque
 
@@ -67,7 +67,7 @@ def get_lat_lon_24bit(buf: bytes) -> float:
     """
     Convert a 24bit lat/lon value in to its float equivalent.
     """
-    r = struct.unpack(">i", b'\0' + buf)[0]
+    r = struct.unpack(">i", b"\0" + buf)[0]
     d = float(r) * LAT_LON_RESOLUTION
 
     if r & 0x800000:
@@ -88,7 +88,11 @@ def get_lat_lon_32bit(buf: bytes) -> float:
 
 ####################################################################
 #
-def datetime_str(date_bin: int, time_of_day: int, tenths_of_sec: int = 0, ) -> datetime:
+def datetime_str(
+    date_bin: int,
+    time_of_day: int,
+    tenths_of_sec: int = 0,
+) -> datetime:
     """
     The formula for converting the XGPS160 binary data for a date, time of
     day, tenths of a sec to a python datetime object.
@@ -165,6 +169,7 @@ class LoggingRate(enum.IntEnum):
     """
     Logging rate can only be one of the following enumerations
     """
+
     SEC_00_1 = 1  # 10hz
     SEC_00_2 = 2  # 5hz
     SEC_00_5 = 5  # 2hz
@@ -186,6 +191,7 @@ class Cmd160(enum.IntEnum):
     """
     The possible commands and command responses for the XGPS160.
     """
+
     ack = 0
     nack = 1
     response = 2
@@ -300,6 +306,15 @@ class XGPS160(asyncio.Protocol):
         self.new_log_list_item_received = False
         self.device_settings_have_been_read = False
         self.bulk_data_has_been_read = False
+
+        # Hm.. maybe we should enforce that you can only send one command at a
+        # time and no other until the one currently sent has finished.. and
+        # then use a single asyncio.Event to notify this.
+        #
+        self.delete_event = asyncio.Event()
+        self.settings_event = asyncio.Event()
+        self.bulk_data_event = asyncio.Event()
+        self.log_list_event = asyncio.Event()
 
     ####################################################################
     #
@@ -483,9 +498,6 @@ class XGPS160(asyncio.Protocol):
                     # arrives that has a valid command character in it.
                     #
                     if not any(x in self.rcvd_buff for x in (b"$", 0x88)):
-                        rprint(
-                            f"No command characters in packet: {repr(self.rcvd_buff)}"
-                        )
                         self.rcvd_buff = b""
                         return
 
@@ -551,15 +563,14 @@ class XGPS160(asyncio.Protocol):
                     case Cmd160.logReadBulk:
                         self.parse_log_read_bulk(cmd_response[2:])
                     case Cmd160.logDelBlock:
-                        if cmd_response[2] == 0x01:
-                            rprint("Block data deleted")
-                            asyncio.create_task(self.get_recorded_logs())
-                        else:
-                            rprint("Error deleting block data")
+                        if cmd_response[2] != 0x01:
+                            rprint(f"Error deleting block data: {cmd_response.hex(':')}")
+                        self.delete_event.set()
 
                     case Cmd160.response:
                         self.rsp160_cmd = cmd
                         self.rsp160_len = 0
+                        rprint(f"Command response {Cmd160(response).name}")
                     case _:
                         rprint("huh.. unknown response code")
             case _:
@@ -569,12 +580,8 @@ class XGPS160(asyncio.Protocol):
     #
     def parse_get_settings_resp(self, settings_data):
         """ """
-        rprint(f"settings data: {settings_data.hex(':')}")
         settings = Settings._make(SettingsStruct.unpack_from(settings_data, 1))
 
-        rprint(
-            f"settings: {settings.settings:>08b}, log interval: {settings.log_interval}, cfg block: {settings.block}, log offset: {settings.offset}"
-        )
         self.cfg_gps_settings = settings.settings
         self.cfg_log_interval = settings.log_interval
         self.log_update_rate = settings.log_interval
@@ -663,8 +670,11 @@ class XGPS160(asyncio.Protocol):
     #
     def parse_log_read_bulk(self, bulk_log_data):
         """
-        Keyword Arguments:
-        bulk_log_data --
+        This is called when we have received a GPS sample data packet. When
+        doing a sample download the device will send a whole bunch of packets,
+        each with an "addr" and "data_size" element. When these two elements
+        are both 0 then that means that the device has sent us all of the data
+        for the required data log.
         """
         addr, data_size = struct.unpack_from(">IB", bulk_log_data, 0)
 
@@ -686,9 +696,7 @@ class XGPS160(asyncio.Protocol):
         # (1 or 2.. but my device is always 2 since it is a later version)
         #
         while bulk_log_data:
-            log_entry = LogEntry._make(
-                LogEntryStruct.unpack_from(bulk_log_data, 0)
-            )
+            log_entry = LogEntry._make(LogEntryStruct.unpack_from(bulk_log_data, 0))
 
             # Any version besides 1 or 2 indicates end of data entry packets in
             # our buffer (and likely end of all gps sample data for this entry)
@@ -768,14 +776,14 @@ class XGPS160(asyncio.Protocol):
                 lat = get_lat_lon_32bit(sample.latitude)
                 lon = get_lat_lon_32bit(sample.longitude)
                 # Convert 24bit altitude from centimeters to feet.
-                alt = struct.unpack(">I",b'\0' + sample.altitude)[0] / 100.0 / 0.3048
+                alt = struct.unpack(">I", b"\0" + sample.altitude)[0] / 100.0 / 0.3048
                 heading = sample.heading * 360.0 / 256.0
             case 1:
                 when = datetime_str(sample.date, sample.tod)
                 lat = get_lat_lon_24bit(sample.latitude)
                 lon = get_lat_lon_24bit(sample.longitude)
                 # Convert 24bit altitude from units of 5ft
-                alt = struct.unpack(">I",b'\0' + sample.altitude) * 5.0
+                alt = struct.unpack(">I", b"\0" + sample.altitude) * 5.0
                 heading = sample.heading * 360.0 / 256.0
         d = {
             "datetime": when,
@@ -821,23 +829,13 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def start_logging(self):
-        """ """
-        pass
-
-    ####################################################################
-    #
-    def stop_logging(self):
-        """ """
-        pass
-
-    ####################################################################
-    #
-    async def get_recorded_logs(self):
+    async def get_recorded_logs(self) -> List:
         """
         Gets the list of recorded log records from the device (this is not
         the actual logged data, it is the list of fixed size items that contain
         the log data.)
+
+        XXX Needs better name.
         """
         self.log_list_entries = []
         self.new_log_list_item_received = False
@@ -849,8 +847,24 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    async def get_gps_sample_data_for_log_list_item(self, log_list_item):
-        """ """
+    async def get_gps_sample_data_for_log_list_item(
+        self,
+        log_list_item,
+    ) -> List:
+        """
+        Download the GPS sample data for the specific log list item.
+
+        It will return a list of tuples. Each tuple represents one GPS
+        point. The first element in the tuple is the "log entry" information
+        for the datapoint indicating the sequence number of the data type (it
+        mostly can be just ignored). The second element will be a dict with the
+        data for the GPS point including things such as datetime, longitude,
+        latitude, and altitude.
+
+        This function will await until the complete results have been received
+        from the device.
+
+        """
         self.log_data_samples = []
         # XXX We should start using signals for stuff like this.
         self.bulk_data_has_been_read = False
@@ -866,25 +880,31 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def delete_gps_sample_data_for_log_list_item(self, log_list_item):
-        """ """
+    async def delete_gps_data(self, log_list_item) -> List:
+        """
+        Given a specific log list item tell the device to delete the
+        associated GPS sample data.
+
+        This will also fetch the log list from the device and return it.
+        """
+        self.delete_event.clear()
         start_block = log_list_item["start_block"]
         count_block = log_list_item["count_block"]
 
-        payload = struct.pack("<HH", start_block, count_block)
-        self.send_command(Cmd160.log_del_block, payload)
+        payload = struct.pack(">HH", start_block, count_block)
+        self.send_command(Cmd160.logDelBlock, payload)
+        await self.delete_event.wait()
 
-        # find log_list_item in self.log_list_entries and delete it.
-        #
         self.log_list_entries = [
             x
             for x in self.log_list_entries
             if not (x["start_block"] == start_block and x["count_block"] == count_block)
         ]
+        return self.log_list_entries
 
     ####################################################################
     #
-    def enter_log_access_mode(self):
+    async def enter_log_access_mode(self):
         """
         It's much simpler to deal with log data information while the
         device is not streaming GPS data. So the recommended practice is to
@@ -896,7 +916,7 @@ class XGPS160(asyncio.Protocol):
         """
         self.send_command(Cmd160.streamStop)
         self.streaming_mode = False
-        self.get_recorded_logs()
+        return await self.get_recorded_logs()
 
     ####################################################################
     #
@@ -910,7 +930,7 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def datalog_overwrite(self, overwrite: bool):
+    async def datalog_overwrite(self, overwrite: bool):
         """
         If overwrite is True then when storage fills up the oldest log
         records will be overwritten as new data comes in.
@@ -922,10 +942,11 @@ class XGPS160(asyncio.Protocol):
             self.send_command(Cmd160.logOWEnable)
         else:
             self.send_command(Cmd160.logOWDisable)
+        await self.read_device_settings()
 
     ####################################################################
     #
-    def datalog_enable(self, enable: bool):
+    async def datalog_enable(self, enable: bool):
         """
         This enables or disables automatic data logging when the device
         powers on.
@@ -937,6 +958,7 @@ class XGPS160(asyncio.Protocol):
             self.send_command(Cmd160.logEnable)
         else:
             self.send_command(Cmd160.logDisable)
+        await self.read_device_settings()
 
     ####################################################################
     #
