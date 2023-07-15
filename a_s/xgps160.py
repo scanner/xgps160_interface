@@ -41,10 +41,13 @@ K_VOLT_350 = 543
 #
 DEFAULT_MAX_NMEA_MESSAGES = 10_000
 
-LogEntryStruct = struct.Struct("!BB")
+# seq - sequence number of the record (wrap after 255)
+# type - 0 = dataentry_t, 2=dataentry2_t,
+#
+LogEntryStruct = struct.Struct("<BB")
 LogEntry = namedtuple("LogEntry", "seq type")
 
-DataEntryStruct = struct.Struct("!HHB3s3s3sHBBBB")
+DataEntryStruct = struct.Struct("<HHB3s3s3sHBBBB")
 
 # NOTE: latitude, longitude, altitude are 3 byte long `bytes`
 # type. Need to do int.from_bytes(bytes,byteorder="big",signed=True)
@@ -56,7 +59,7 @@ DataEntry = namedtuple(
 # NOTE: Longitutde, latitude, altitude are MSB order so need to be
 #       interprete separately with int.from_bytes()
 #
-Data2EntryStruct = struct.Struct("!HHB4s4s3sHBB")
+Data2EntryStruct = struct.Struct("<HHB4s4s3sHBB")
 Data2Entry = namedtuple(
     "Data2Entry",
     "date tod tod2 latitutde longitude altitude speed heading satsig",
@@ -160,6 +163,7 @@ class GPSSettings(enum.IntFlag):
           display indicates.
           (We always get back `00010100`. Positions 0x40 and 0x80 are never set.
     """
+
     # If set then device will record to the datalog when it powers up
     datalog_enabled = 0x40
     # If set then when datalog memory fills up, overwrite the oldest entries.
@@ -173,18 +177,19 @@ class LoggingRate(enum.IntEnum):
     """
     Logging rate can only be one of the following enumerations
     """
-    SEC_00_1 = 1      # 10hz
-    SEC_00_2 = 2      # 5hz
-    SEC_00_5 = 5      # 2hz
-    SEC_01_0 = 10     # 1hz -- once every second
-    SEC_02_0 = 20     # once every 2 seconds
-    SEC_03_0 = 30     # once every 3 seconds
-    SEC_04_0 = 40     # once every 4 seconds
-    SEC_05_0 = 50     # once every 5 seconds
-    SEC_10_0 = 100    # once every 10 seconds
-    SEC_12_0 = 120    # once every 12 seconds
-    SEC_15_0 = 150    # once every 15 seconds
-    SEC_20_0 = 200    # once every 20 seconds
+
+    SEC_00_1 = 1  # 10hz
+    SEC_00_2 = 2  # 5hz
+    SEC_00_5 = 5  # 2hz
+    SEC_01_0 = 10  # 1hz -- once every second
+    SEC_02_0 = 20  # once every 2 seconds
+    SEC_03_0 = 30  # once every 3 seconds
+    SEC_04_0 = 40  # once every 4 seconds
+    SEC_05_0 = 50  # once every 5 seconds
+    SEC_10_0 = 100  # once every 10 seconds
+    SEC_12_0 = 120  # once every 12 seconds
+    SEC_15_0 = 150  # once every 15 seconds
+    SEC_20_0 = 200  # once every 20 seconds
 
 
 ########################################################################
@@ -194,6 +199,7 @@ class Cmd160(enum.IntEnum):
     """
     The possible commands for the XGPS160.
     """
+
     ack = 0
     nack = 1
     response = 2
@@ -255,7 +261,7 @@ class XGPS160(asyncio.Protocol):
 
         self.nmea_messages = deque(maxlen=max_nmea_msgs)
 
-        self.rcvd_buff = b''
+        self.rcvd_buff = b""
 
         self.rsp160_cmd = 0
 
@@ -271,7 +277,15 @@ class XGPS160(asyncio.Protocol):
         self.is_charging = False
         self.streaming_mode = True
 
+        # A list of the log entries in the device. Refreshed when
+        # `get_recorded_logs()` is called and completes.
+        #
         self.log_list_entries = []
+
+        # An array used to build up GPS sample data retrieved for
+        # get_gps_sample_data_for_log_list_item(). Only valid during the
+        # duration of that call.
+        #
         self.log_data_samples = []
 
         self.log_list_item_timer_started = False
@@ -281,6 +295,7 @@ class XGPS160(asyncio.Protocol):
         self.datalog_overwrite = False
 
         self.device_settings_have_been_read = False
+        self.bulk_data_has_been_read = False
 
         self.total_GPS_samples_in_log_entry = 0
 
@@ -420,7 +435,7 @@ class XGPS160(asyncio.Protocol):
                     # response attempt to parse it. Otherwise we are done with
                     # this packet.
                     #
-                    self.rcvd_buff = self.rcvd_buff[cmd_resp_length + 4:]
+                    self.rcvd_buff = self.rcvd_buff[cmd_resp_length + 4 :]
                     if self.rcvd_buff:
                         continue
                     return
@@ -445,7 +460,7 @@ class XGPS160(asyncio.Protocol):
                     # If there is any self.rcvd_buff left to parse, try parsing
                     # it, otherwise we are done with this packet.
                     #
-                    self.rcvd_buff = self.rcvd_buff[crlf_pos + 2:]
+                    self.rcvd_buff = self.rcvd_buff[crlf_pos + 2 :]
                     if len(self.rcvd_buff):
                         continue
                     return
@@ -459,7 +474,7 @@ class XGPS160(asyncio.Protocol):
                         rprint(
                             f"No command characters in packet: {repr(self.rcvd_buff)}"
                         )
-                        self.rcvd_buff = b''
+                        self.rcvd_buff = b""
                         return
 
                     # Truncate to the first command byte we have.
@@ -514,20 +529,20 @@ class XGPS160(asyncio.Protocol):
                 return
 
             case Cmd160.fwRsp:
-
                 sub_cmd = cmd_response[1]
-                rprint(f"* [blue][bold]{Cmd160(sub_cmd).name}[/bold][/blue]")
+                # rprint(f"* [blue][bold]{Cmd160(sub_cmd).name}[/bold][/blue]")
                 match sub_cmd:
                     case Cmd160.getSettings:
                         self.parse_get_settings_resp(cmd_response[1:])
                     case Cmd160.logListItem:
                         self.parse_log_list_item(cmd_response[2:])
                     case Cmd160.logReadBulk:
+                        # rprint(f"log read bulk, full response: {self.rcvd_buff.hex(':')}")
                         self.parse_log_read_bulk(cmd_response[2:])
                     case Cmd160.logDelBlock:
                         if cmd_response[2] == 0x01:
                             rprint("Block data deleted")
-                            # self.get_list_of_recorded_logs()
+                            asyncio.create_task(self.get_recorded_logs())
                         else:
                             rprint("Error deleting block data")
 
@@ -546,7 +561,9 @@ class XGPS160(asyncio.Protocol):
         rprint(f"settings data: {settings_data.hex(':')}")
         settings = Settings._make(SettingsStruct.unpack_from(settings_data, 1))
 
-        rprint(f"settings: {settings.settings:>08b}, log interval: {settings.log_interval}, cfg block: {settings.block}, log offset: {settings.offset}")
+        rprint(
+            f"settings: {settings.settings:>08b}, log interval: {settings.log_interval}, cfg block: {settings.block}, log offset: {settings.offset}"
+        )
         self.cfg_gps_settings = settings.settings
         self.cfg_log_interval = settings.log_interval
         self.log_update_rate = settings.log_interval
@@ -564,7 +581,7 @@ class XGPS160(asyncio.Protocol):
         Keyword Arguments:
         log_item_data --
         """
-        rprint(f"log item, len: {len(log_item_data)}: {log_item_data.hex(':')}")
+        # rprint(f"log item, len: {len(log_item_data)}: {log_item_data.hex(':')}")
 
         list_idx, list_total = struct.unpack_from(
             ">HH",
@@ -603,9 +620,7 @@ class XGPS160(asyncio.Protocol):
         if log_item.interval == 255:
             sample_interval = 10.0
 
-        recording_length_in_sec = (
-            log_item.count_entry * (sample_interval / 10.0)
-        )
+        recording_length_in_sec = log_item.count_entry * (sample_interval / 10.0)
         duration = timedelta(seconds=recording_length_in_sec)
 
         # NOTE: We combine "start date" and "start time"'s from the objC code
@@ -637,57 +652,62 @@ class XGPS160(asyncio.Protocol):
         log["start_block"] = log_item.start_block
         log["count_block"] = log_item.count_block
         self.log_list_entries.append(log)
-        pprint(log)
-        # self.processing_log_list_entries_after_delay()
+        # pprint(log)
 
     ####################################################################
     #
-    def parse_logs_read_bulk(self, bulk_logs_response):
+    def parse_log_read_bulk(self, bulk_log_data):
         """
         Keyword Arguments:
-        bulk_logs_response --
+        bulk_log_data --
         """
-        # The address is an unsigned int, but it only uses the first 3 bytes
-        # from the start of the `bulk_logs_response`.. so we need to copy it
-        # adding that missing byte.
-        #
-        initial_data = "\x00" + bulk_logs_response[:4]
-        addr, data_size = struct.unpack_from("<IB", 0, initial_data)
+        addr, data_size = struct.unpack_from(">IB", bulk_log_data, 0)
 
-        log_entry_size = LogEntryStruct.size + max(
-            DataEntryStruct.size, Data2EntryStruct.size
-        )
-        self.log_read_bulk_count = data_size / log_entry_size
+        # If addr & data size are 0 then we are done collecting bulk sample
+        # data. We can now decode and tell our caller that the sample data has
+        # been retrieved.
+        #
         if addr == 0 and data_size == 0:
-            # End-of-data
+            self.decode_log_bulk()
+            self.bulk_data_has_been_read = True
+            return
+
+        # To make code easier to read we cut off the int & byte we just read
+        # from the data. Everything here should be the bulk gps sample data we
+        # care about.
+        #
+        bulk_log_data = bulk_log_data[5:]
+
+        # Loop through the data determining what kind of data entry type it is
+        # (1 or 2.. but my device is always 2 since it is a later version)
+        #
+        while bulk_log_data:
+            log_entry = LogEntry._make(
+                LogEntryStruct.unpack_from(bulk_log_data, 0)
+            )
+
+            # Any version besides 1 or 2 indicates end of data entry packets in
+            # our buffer (and likely end of all gps sample data for this entry)
             #
-            self.log_read_bulk_count |= 0x1000000
-            # self.decode_log_bulk()
-            self.log_read_bulk_count = 0
-            self.log_bulk_recode_cnt = 0
-            self.log_bulk_by_cnt = 0
-            self.log_records = []
-        else:
-            # Looks like we get 5 log entries at a time.
-            for loop_idx in range(5):
-                # XXX can we do this with a `step` on the range?
-                idx = 10 + (loop_idx * log_entry_size)
-                log_entry = LogEntry._make(
-                    LogEntryStruct.unpack_from(bulk_logs_response, idx)
+            if log_entry.type == 2:
+                data_entry = Data2Entry._make(
+                    Data2EntryStruct.unpack_from(bulk_log_data, 2)
                 )
-                if LogEntry.type == 1:
-                    de = DataEntry._make(
-                        DataEntryStruct.unpack_from(
-                            bulk_logs_response, idx + LogEntryStruct.size
-                        )
-                    )
-                else:
-                    de = Data2Entry._make(
-                        Data2EntryStruct.unpack_from(
-                            bulk_logs_response, idx + LogEntryStruct.size
-                        )
-                    )
-                    self.log_records.append((log_entry, de))
+            elif log_entry.type == 1:
+                data_entry = DataEntry._make(
+                    DataEntryStruct.unpack_from(bulk_log_data, 2)
+                )
+            else:
+                break
+
+            self.log_data_samples.append((log_entry, data_entry))
+            # The ObjC source code used a union struct which takes the maximal
+            # size of the sub-structs and that is the Data2Entry. So chop off
+            # from our bulk log data bytes that amount of data to get to the
+            # next element.
+            #
+            data_size = LogEntryStruct.size + Data2EntryStruct.size
+            bulk_log_data = bulk_log_data[data_size:]
 
     ####################################################################
     #
@@ -732,15 +752,7 @@ class XGPS160(asyncio.Protocol):
     #
     def decode_log_bulk(self):
         """ """
-        self.log_data_samples = []
-        for idx, (log_entry, data_entry) in enumerate(self.log_records):
-            rprint(f"{idx:02d}: {log_entry}")
-            # if log_entry.type == 0:
-            #     data_entry = log_entry.data  # Union.. dataentry vs data2entry
-            #     # ....
-            # else:
-            #     data_2_entry = log_entry.data
-            #     # ....
+        pass
 
     ####################################################################
     #
@@ -788,7 +800,7 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    async def get_list_of_recorded_logs(self):
+    async def get_recorded_logs(self):
         """
         Gets the list of recorded log records from the device (this is not
         the actual logged data, it is the list of fixed size items that contain
@@ -804,14 +816,20 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def get_gps_sample_data_for_log_list_item(self, log_list_item):
+    async def get_gps_sample_data_for_log_list_item(self, log_list_item):
         """ """
         self.log_data_samples = []
+        # XXX We should start using signals for stuff like this.
+        self.bulk_data_has_been_read = False
         start_block = log_list_item["start_block"]
         count_block = log_list_item["count_block"]
 
-        payload = struct.pack("<HH", start_block, count_block)
-        self.send_command(Cmd160.log_read_bulk, payload)
+        payload = struct.pack(">HH", start_block, count_block)
+        self.send_command(Cmd160.logReadBulk, payload)
+
+        while not self.bulk_data_has_been_read:
+            await asyncio.sleep(0.1)
+        return self.log_data_samples
 
     ####################################################################
     #
@@ -828,8 +846,7 @@ class XGPS160(asyncio.Protocol):
         self.log_list_entries = [
             x
             for x in self.log_list_entries
-            if not (x["start_block"] == start_block and
-                    x["count_block"] == count_block)
+            if not (x["start_block"] == start_block and x["count_block"] == count_block)
         ]
 
     ####################################################################
@@ -846,7 +863,7 @@ class XGPS160(asyncio.Protocol):
         """
         self.send_command(Cmd160.streamStop)
         self.streaming_mode = False
-        self.get_list_of_recorded_logs()
+        self.get_recorded_logs()
 
     ####################################################################
     #
