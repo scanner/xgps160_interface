@@ -1,4 +1,8 @@
 # xgps160_interface
+![](https://img.shields.io/badge/language-python-orange.svg?style=flat)
+![Platform](https://img.shields.io/badge/platform-macos%20%7C%20linux-lightgrey?style=flat)
+![](https://img.shields.io/badge/version-0.0.1-blue.svg?style=flat)
+
 A python module for interfacing with the DualSky XGPS160. This project was primarily motivated because I wanted an easy way to download all the tracks record in the GPS without going through the painful iOS app the vendor provided.
 
 Luckily the vendor also provided ObjC code that has information to implement an interface to retrieve this data.
