@@ -14,7 +14,7 @@ black==23.7.0
     # via -r ./requirements.in
 build==0.10.0
     # via pip-tools
-click==8.1.4
+click==8.1.5
     # via
     #   black
     #   pip-tools
@@ -22,6 +22,8 @@ decorator==5.1.1
     # via ipython
 executing==1.2.0
     # via stack-data
+gpxpy==1.5.0
+    # via -r ./requirements.in
 ipython==8.14.0
     # via -r ./requirements.in
 isort==5.12.0
@@ -48,7 +50,7 @@ pexpect==4.8.0
     # via ipython
 pickleshare==0.7.5
     # via ipython
-pip-tools==6.14.0
+pip-tools==7.0.0
     # via -r ./requirements.in
 platformdirs==3.8.1
     # via black

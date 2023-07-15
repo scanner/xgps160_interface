@@ -13,7 +13,9 @@ import time
 
 # 3rd party imports
 #
+from gpxpy.gpx import GPX, GPXTrack, GPXTrackSegment, GPXTrackPoint
 from rich import print as rprint
+from rich.pretty import pprint
 from rich.traceback import install as install_tb
 
 # Project imports
@@ -42,7 +44,30 @@ async def main(loop):
 
     # Get the gps data for the last log entry
     #
-    await xgps.get_gps_sample_data_for_log_list_item(xgps.log_list_entries[-1])
+    gps_data = await xgps.get_gps_sample_data_for_log_list_item(
+        xgps.log_list_entries[-1]
+    )
+
+    # Create a GPX file from the gps data in the last log entry.
+    #
+    gpx = GPX()
+    gpx_track = GPXTrack()
+    gpx.tracks.append(gpx_track)
+    gpx_segment = GPXTrackSegment()
+    gpx_track.segments.append(gpx_segment)
+
+    for entry, data in gps_data:
+        gpx_segment.points.append(
+            GPXTrackPoint(
+                data["longitude"],
+                data["latitude"],
+                elevation=data["altitude"],
+                time=data["datetime"],
+            )
+        )
+
+    with open("track.gpx", "w") as f:
+        f.write(gpx.to_xml())
 
     # For now loop forever..
     #
@@ -50,31 +75,31 @@ async def main(loop):
     charging = xgps.is_charging
     last_check = time.time()
 
-    while True:
-        if xgps.is_charging != charging:
-            rprint(f"Charging: {xgps.is_charging}")
-            charging = xgps.is_charging
+    # while True:
+    #     if xgps.is_charging != charging:
+    #         rprint(f"Charging: {xgps.is_charging}")
+    #         charging = xgps.is_charging
 
-        if not charging and voltage != xgps.battery_voltage:
-            rprint(
-                f"Battery voltage: {xgps.battery_voltage}, num nmea messages: "
-                f"{len(xgps.nmea_messages)}"
-            )
-            voltage = xgps.battery_voltage
+    #     if not charging and voltage != xgps.battery_voltage:
+    #         rprint(
+    #             f"Battery voltage: {xgps.battery_voltage}, num nmea messages: "
+    #             f"{len(xgps.nmea_messages)}"
+    #         )
+    #         voltage = xgps.battery_voltage
 
-        # Once a minute check the device settings. Print if they have changed.
-        #
-        now = time.time()
-        if now - last_check > 60:
-            await xgps.read_device_settings()
-            rprint(f"Device settings: {xgps.cfg_gps_settings:>08b}")
-            rprint(f"Datalog enabled: {xgps.datalog_enabled}")
-            rprint(f"Datalog overwrite: {xgps.datalog_overwrite}")
-            rprint(f"Config block: {xgps.cfg_block}, log offset: {xgps.cfg_log_offset}")
-            rprint(f"Log update rate: {xgps.log_update_rate}")
-            last_check = now
+    #     # Once a minute check the device settings. Print if they have changed.
+    #     #
+    #     now = time.time()
+    #     if now - last_check > 60:
+    #         await xgps.read_device_settings()
+    #         rprint(f"Device settings: {xgps.cfg_gps_settings:>08b}")
+    #         rprint(f"Datalog enabled: {xgps.datalog_enabled}")
+    #         rprint(f"Datalog overwrite: {xgps.datalog_overwrite}")
+    #         rprint(f"Config block: {xgps.cfg_block}, log offset: {xgps.cfg_log_offset}")
+    #         rprint(f"Log update rate: {xgps.log_update_rate}")
+    #         last_check = now
 
-        await asyncio.sleep(1)
+    #     await asyncio.sleep(1)
 
 
 ############################################################################

@@ -62,7 +62,7 @@ DataEntry = namedtuple(
 Data2EntryStruct = struct.Struct("<HHB4s4s3sHBB")
 Data2Entry = namedtuple(
     "Data2Entry",
-    "date tod tod2 latitutde longitude altitude speed heading satsig",
+    "date tod tod2 latitude longitude altitude speed heading satsig",
 )
 
 LAT_LON_RESOLUTION = 2.1457672e-5
@@ -75,7 +75,7 @@ def get_lat_lon_24bit(buf: bytes) -> float:
     Keyword Arguments:
     buf: bytearray --
     """
-    r = int.from_bytes(buf, byteorder="big")
+    r = int.from_bytes(buf, byteorder="little")
     d = float(r) * LAT_LON_RESOLUTION
 
     if r & 0x800000:
@@ -98,7 +98,7 @@ def get_lat_lon_32bit(buf: bytes) -> float:
 
 ####################################################################
 #
-def datetime_str(date_bin: int, time_of_day: int) -> datetime:
+def datetime_str(date_bin: int, time_of_day: int, tenths_of_sec: int = 0) -> datetime:
     year = 2012 + (date_bin // 372)
     month = 1 + (date_bin % 372) // 31
     day = 1 + (date_bin % 31)
@@ -107,6 +107,8 @@ def datetime_str(date_bin: int, time_of_day: int) -> datetime:
     minute = (time_of_day % 3600) // 60
     second = time_of_day % 60
 
+    usec = tenths_of_sec * 100_000
+
     return datetime(
         year=year,
         month=month,
@@ -114,6 +116,7 @@ def datetime_str(date_bin: int, time_of_day: int) -> datetime:
         hour=hour,
         minute=minute,
         second=second,
+        microsecond=usec,
         tzinfo=UTC,
     )
 
@@ -668,7 +671,7 @@ class XGPS160(asyncio.Protocol):
         # been retrieved.
         #
         if addr == 0 and data_size == 0:
-            self.decode_log_bulk()
+            rprint(f"Loaded {len(self.log_data_samples)} from device")
             self.bulk_data_has_been_read = True
             return
 
@@ -700,7 +703,8 @@ class XGPS160(asyncio.Protocol):
             else:
                 break
 
-            self.log_data_samples.append((log_entry, data_entry))
+            data = self.convert_bulk_data_entry(log_entry, data_entry)
+            self.log_data_samples.append((log_entry, data))
             # The ObjC source code used a union struct which takes the maximal
             # size of the sub-structs and that is the Data2Entry. So chop off
             # from our bulk log data bytes that amount of data to get to the
@@ -750,9 +754,45 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    def decode_log_bulk(self):
-        """ """
-        pass
+    def convert_bulk_data_entry(self, entry, sample):
+        """
+        Convert the DataEntry to a dict with the values converted to more
+        appropriate types (datetimes, floats, feet, etc.)
+        """
+        converted_data = []
+        match entry.type:
+            case 2:
+                when = datetime_str(sample.date, sample.tod, tenths_of_sec=sample.tod2, )
+                r = struct.unpack("<I", sample.latitude)[0]
+                rprint("latitude: {sample.latitudue.hex(':')}, decoded: {r}" )
+                # lat = float(r) * LAT_LON_RESOLUTION
+                lat = float(r) * 0.000001
+                if r & 0x800000:
+                    lat = -lat
+                r = struct.unpack("<I", sample.longitude)[0]
+                # lon = float(r) * LAT_LON_RESOLUTION
+                lon = float(r) * 0.000001
+                if r & 0x800000:
+                    lon = -lon
+                # Convert 24bit altitude from centimeters to feet.
+                alt = struct.unpack(">I",b'\0' + sample.altitude)[0] / 100.0 / 0.3048
+                heading = sample.heading * 360.0 / 256.0
+            case 1:
+                when = datetime_str(sample.date, sample.tod)
+                lat = get_lat_lon_24bit(sample.latitude)
+                lon = get_lat_lon_24bit(sample.longitude)
+                # Convert 24bit altitude from units of 5ft
+                alt = struct.unpack(">I",b'\0' + sample.altitude) * 5.0
+                heading = sample.heading * 360.0 / 256.0
+        d = {
+            "datetime": when,
+            "latitude": lat,
+            "longitude": lon,
+            "altitude": alt,
+            "speed": sample.speed,
+            "heading": heading,
+        }
+        return d
 
     ####################################################################
     #
