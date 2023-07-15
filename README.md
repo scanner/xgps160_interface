@@ -9,7 +9,7 @@ Luckily the vendor also provided ObjC code that has information to implement an 
 
 The script `read_from_gps.py` will accomplish this. It was written on a Mac and thus the format of the tty for the bluetooth serial connection is hardcoded to that but it should be easy enough to get it to run on other platforms provided you can get a bluetooth serial connection up.
 
-The ObjectC this was copied from is at: [https://github.com/dualav/XGPS160-SDK-iOS](dualav/XGPS160-SDK-iOS)
+The ObjectiveC this was copied from is at: [https://github.com/dualav/XGPS160-SDK-iOS](dualav/XGPS160-SDK-iOS)
 
 # Example code
 

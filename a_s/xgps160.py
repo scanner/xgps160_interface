@@ -101,6 +101,12 @@ def datetime_str(date_bin: int, time_of_day: int, tenths_of_sec: int = 0, ) -> d
     minute = (time_of_day % 3600) // 60
     second = time_of_day % 60
 
+    # XXX This is not correct. ObjC code:
+    #        tod = (d->tod2 & 0x10);
+    #        tod <<= 12;
+    #        tod |= d->tod;
+    #        tod10th = d->tod2 & 0x0F;
+    #
     usec = tenths_of_sec * 100_000
 
     return datetime(
@@ -331,6 +337,14 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
+    def close(self):
+        """
+        Close our connection to the device.
+        """
+        self.transport.close()
+
+    ####################################################################
+    #
     def connection_made(self, transport):
         self.transport = transport
         self.is_connected = True
@@ -338,7 +352,10 @@ class XGPS160(asyncio.Protocol):
     ####################################################################
     #
     def connection_lost(self, exc):
-        rprint(f"Connetion lost: {exc}")
+        if exc:
+            rprint(f"Connetion lost: {exc}")
+        else:
+            rprint("Connection closed")
         self.transport = None
         self.is_connected = False
 
@@ -746,7 +763,8 @@ class XGPS160(asyncio.Protocol):
         converted_data = []
         match entry.type:
             case 2:
-                when = datetime_str(sample.date, sample.tod, tenths_of_sec=sample.tod2, )
+                # when = datetime_str(sample.date, sample.tod, tenths_of_sec=sample.tod2, )
+                when = datetime_str(sample.date, sample.tod)
                 lat = get_lat_lon_32bit(sample.latitude)
                 lon = get_lat_lon_32bit(sample.longitude)
                 # Convert 24bit altitude from centimeters to feet.

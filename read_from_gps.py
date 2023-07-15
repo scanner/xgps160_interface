@@ -10,6 +10,7 @@ anything from it to see if I have the protocol correct.
 #
 import asyncio
 import time
+from datetime import datetime, timedelta
 
 # 3rd party imports
 #
@@ -46,10 +47,26 @@ async def main(loop):
     #
     gps_tracks = []
     for log_list in xgps.log_list_entries:
+        rprint(
+            f"Loading GPS data for log {log_list['start_block']}-{log_list['count_block']}"
+        )
         gps_data = await xgps.get_gps_sample_data_for_log_list_item(log_list)
         gps_tracks.append(gps_data)
 
-    # Create a GPX file from the gps data in the last log entry.
+    # We no longer need a connection to the device since we have downloaded all
+    # the tracks.
+    #
+    xgps.close()
+
+    # The GPS160 basically stores a fixed number of points in a data log. If
+    # youare recording data continuously for longer than one data log can
+    # store, it will create multiple datalogs.
+    #
+    # If you just translate one datalog to one track then you get a lot of very
+    # short tracks. What we do here is if the start of the next log is within
+    # 30 minutes of the end of the previous log then we treat the next log as
+    # part of the same track (maybe we should break this up in to track
+    # segments?)
     #
     gpx = GPX()
     gpx_track = GPXTrack()
@@ -57,24 +74,63 @@ async def main(loop):
     gpx_segment = GPXTrackSegment()
     gpx_track.segments.append(gpx_segment)
 
-    for entry, data in gps_data:
-        gpx_segment.points.append(
-            GPXTrackPoint(
-                longitude=data["longitude"],
-                latitude=data["latitude"],
-                elevation=data["altitude"],
-                time=data["datetime"],
-            )
+    # make the start & end time the timestamp of the first entry in the first
+    # track we got from the GPS.
+    end_time = gps_tracks[0][0][1]["datetime"]
+    start_time = gps_tracks[0][0][1]["datetime"]
+    min_timedelta = timedelta(minutes=45)
+    dt_format = "%Y-%m-%d_%H-%M-%S"
+
+    for gps_track in gps_tracks:
+        # Starting a new GPS track.. see if the timestamp of the first entry is
+        # more than min timedelta from the timestamp of the last entry in the
+        # previous track.
+        #
+        rprint(
+            f"Starting track {gps_track[0][1]['datetime']}",
+            end="",
+            flush=True,
         )
 
-    with open("track.gpx", "w") as f:
-        f.write(gpx.to_xml())
+        if gps_track[0][1]["datetime"] - end_time > min_timedelta:
+            start = start_time.strftime(dt_format)
+            end = end_time.strftime(dt_format)
+            filename = f"{start}--{end}.gpx"
+            with open(filename, "w") as f:
+                f.write(gpx.to_xml())
+            rprint(f"\nWrote gps track `{filename}`")
+            gpx = GPX()
+            gpx_track = GPXTrack()
+            gpx.tracks.append(gpx_track)
+            gpx_segment = GPXTrackSegment()
+            gpx_track.segments.append(gpx_segment)
 
-    # For now loop forever..
+            # We also can now set the start_time and end_time
+            # track.
+            #
+            start_time = gps_track[0][1]["datetime"]
+            end_time = gps_track[-1][1]["datetime"]
+
+        for entry, data in gps_track:
+            rprint(".", end="", flush=True)
+            gpx_segment.points.append(
+                GPXTrackPoint(
+                    longitude=data["longitude"],
+                    latitude=data["latitude"],
+                    elevation=data["altitude"],
+                    time=data["datetime"],
+                )
+            )
+        rprint("")
+
+    # and at the end write the final collected track out.
     #
-    voltage = xgps.battery_voltage
-    charging = xgps.is_charging
-    last_check = time.time()
+    start = start_time.strftime(dt_format)
+    end = end_time.strftime(dt_format)
+    filename = f"{start}--{end}.gpx"
+    with open(filename, "w") as f:
+        f.write(gpx.to_xml())
+    rprint(f"Wrote gps track `{filename}`")
 
 
 ############################################################################
