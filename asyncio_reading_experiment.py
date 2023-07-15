@@ -8,13 +8,13 @@ Just connect to the XGPS160 and print out all the data we receive from it.
 # system imports
 #
 import asyncio
+
 import serial_asyncio
+from rich import print as rprint
 
 # 3rd party imports
 #
 from rich.traceback import install as install_tb
-from rich import print as rprint
-
 
 install_tb(show_locals=True)
 
@@ -77,7 +77,7 @@ def main():
 #
 # Here is where it all starts
 #
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
 #
 ############################################################################

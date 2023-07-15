@@ -1,0 +1,60 @@
+[tool.black]
+line-length = 80
+exclude = '''
+(
+  /(
+      \.tox
+    | .+/migrations
+    | venv.*
+    | \.venv
+    | \.pre-commit-cache
+  )/
+)
+'''
+
+[tool.isort]
+atomic = true
+profile = "black"
+line_length = 80
+skip_gitignore = true
+filter_files = true
+skip_glob = ["*venv*","*/migrations/*",".*cache"]
+
+[tool.ruff]
+line-length = 80
+exclude = [
+    'migrations/.+\.py$',
+]
+ignore = [
+       "E501",   # Ignore lines that are too long
+]
+
+[tool.mypy]
+mypy_path = "./app/"
+exclude = [
+    '__pycache__',
+    '^\.mnt',
+    '.*[-_]cache',
+    '\.git',
+    'venv*',
+    'tmp',
+    'fixtures',
+    'deployment',
+    'docs',
+    'requirements',
+    'migrations'
+]
+plugins = ["mypy_django_plugin.main"]
+strict_optional = true
+ignore_missing_imports = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["test_*.py", "*_test.py"]
+markers = [
+    "smoke: marks tests as smoke (deselect with '-m \"not smoke\"')",
+    "integration",
+]

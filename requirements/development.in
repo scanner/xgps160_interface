@@ -1,0 +1,7 @@
+-r production.txt
+-r lint.txt
+
+ipython
+pytest
+pytest-asyncio
+pip-tools

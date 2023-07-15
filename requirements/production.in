@@ -1,11 +1,6 @@
-pip-tools
 pyserial
 pyserial-asyncio
 rich
 pynmea2
-black
-isort
-ruff
-ipython
 gpxpy
 docopt

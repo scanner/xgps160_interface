@@ -20,15 +20,13 @@ Options:
 # system imports
 #
 import asyncio
-import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 # 3rd party imports
 #
 from docopt import docopt
-from gpxpy.gpx import GPX, GPXTrack, GPXTrackSegment, GPXTrackPoint
+from gpxpy.gpx import GPX, GPXTrack, GPXTrackPoint, GPXTrackSegment
 from rich import print as rprint
-from rich.pretty import pprint
 from rich.progress import Progress
 from rich.traceback import install as install_tb
 
@@ -40,9 +38,10 @@ install_tb(show_locals=True)
 
 VERSION = "0.2"
 
+
 ####################################################################
 #
-async def download_gps_tracks(device: XGPS160, log_list):
+async def download_gps_tracks(xgps: XGPS160, log_list):
     """
     Download all of the GPS tracks from the device and write the data out
     in to GPS formatted files. The names of the files are from the start and
@@ -91,7 +90,7 @@ async def download_gps_tracks(device: XGPS160, log_list):
     # If it has been more than 10 minutes between a data record stopping and
     # the next data record starting, start a new GPXTrackSegment.
     #
-    seg_timedelta = timedelta(minutes=10)
+    # seg_timedelta = timedelta(minutes=10)  XXX currently unused
     dt_format = "%Y-%m-%d_%H-%M-%S"
 
     with Progress() as progress:
@@ -107,7 +106,9 @@ async def download_gps_tracks(device: XGPS160, log_list):
                 filename = f"{start}--{end}.gpx"
                 with open(filename, "w") as f:
                     f.write(gpx.to_xml())
-                progress.console.print(f"Wrote gps track [blue]`{filename}`[/blue]")
+                progress.console.print(
+                    f"Wrote gps track [blue]`{filename}`[/blue]"
+                )
                 gpx = GPX()
                 gpx_track = GPXTrack()
                 gpx.tracks.append(gpx_track)
@@ -163,7 +164,7 @@ async def main(loop):
     rprint(f"XGPS serial port: {ser_port}")
     xgps = await XGPS160.connect(str(ser_port), loop=loop)
 
-    settings = await xgps.read_device_settings()
+    await xgps.read_device_settings()
     rprint(f"Datalog enabled: {xgps.datalog_enabled}")
     rprint(f"Datalog overwrite: {xgps.datalog_overwrite}")
     rprint(f"Log interval: {xgps.cfg_log_interval}")
@@ -182,8 +183,8 @@ async def main(loop):
     if delete:
         rprint("Deleting GPS data from device..")
         rprint(f"Log list len: {len(log_list)}")
-        for l in log_list:
-            await xgps.delete_gps_data(l)
+        for log in log_list:
+            await xgps.delete_gps_data(log)
         log_list = await xgps.enter_log_access_mode()
         rprint(f"After delete, log list len: {len(log_list)}")
     xgps.exit_log_access_mode()

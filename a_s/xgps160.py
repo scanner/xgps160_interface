@@ -6,23 +6,21 @@ Class for reading from the SkyPro XGP160 via bluetooth
 # system imports
 #
 import asyncio
-import struct
-import pathlib
-import traceback
 import enum
-from typing import Optional, List
-from datetime import datetime, timedelta, UTC
-from collections import namedtuple, deque
+import pathlib
+import struct
+import traceback
+from collections import deque, namedtuple
+from datetime import UTC, datetime, timedelta
+from typing import List, Optional
 
 # 3rd party imports
 #
 import pynmea2
 import serial_asyncio
-from rich.console import Console
 from rich import print as rprint
-from rich.pretty import pprint
+from rich.console import Console
 from rich.traceback import install as install_tb
-
 
 install_tb(show_locals=True)
 
@@ -480,9 +478,13 @@ class XGPS160(asyncio.Protocol):
                     try:
                         self.parse_nmea(nmea_packet)
                     except pynmea2.nmea.SentenceTypeError as exc:
-                        rprint(f"[red][bold]NMEA Parse error:[/bold] {exc}[/red]")
+                        rprint(
+                            f"[red][bold]NMEA Parse error:[/bold] {exc}[/red]"
+                        )
                     except pynmea2.nmea.ChecksumError as exc:
-                        rprint(f"[red][bold]NMEA checksum error:[/bold] {exc}[/red]")
+                        rprint(
+                            f"[red][bold]NMEA checksum error:[/bold] {exc}[/red]"
+                        )
 
                     # If there is any self.rcvd_buff left to parse, try parsing
                     # it, otherwise we are done with this packet.
@@ -564,13 +566,15 @@ class XGPS160(asyncio.Protocol):
                         self.parse_log_read_bulk(cmd_response[2:])
                     case Cmd160.logDelBlock:
                         if cmd_response[2] != 0x01:
-                            rprint(f"Error deleting block data: {cmd_response.hex(':')}")
+                            rprint(
+                                f"Error deleting block data: {cmd_response.hex(':')}"
+                            )
                         self.delete_event.set()
 
                     case Cmd160.response:
                         self.rsp160_cmd = cmd
                         self.rsp160_len = 0
-                        rprint(f"Command response {Cmd160(response).name}")
+                        rprint(f"Command response {Cmd160(cmd).name}")
                     case _:
                         rprint("huh.. unknown response code")
             case _:
@@ -632,7 +636,9 @@ class XGPS160(asyncio.Protocol):
         if log_item.interval == 255:
             sample_interval = 10.0
 
-        recording_length_in_sec = log_item.count_entry * (sample_interval / 10.0)
+        recording_length_in_sec = log_item.count_entry * (
+            sample_interval / 10.0
+        )
         duration = timedelta(seconds=recording_length_in_sec)
 
         # NOTE: We combine "start date" and "start time"'s from the objC code
@@ -696,7 +702,9 @@ class XGPS160(asyncio.Protocol):
         # (1 or 2.. but my device is always 2 since it is a later version)
         #
         while bulk_log_data:
-            log_entry = LogEntry._make(LogEntryStruct.unpack_from(bulk_log_data, 0))
+            log_entry = LogEntry._make(
+                LogEntryStruct.unpack_from(bulk_log_data, 0)
+            )
 
             # Any version besides 1 or 2 indicates end of data entry packets in
             # our buffer (and likely end of all gps sample data for this entry)
@@ -768,7 +776,6 @@ class XGPS160(asyncio.Protocol):
         Convert the DataEntry to a dict with the values converted to more
         appropriate types (datetimes, floats, feet, etc.)
         """
-        converted_data = []
         match entry.type:
             case 2:
                 # when = datetime_str(sample.date, sample.tod, tenths_of_sec=sample.tod2, )
@@ -776,7 +783,11 @@ class XGPS160(asyncio.Protocol):
                 lat = get_lat_lon_32bit(sample.latitude)
                 lon = get_lat_lon_32bit(sample.longitude)
                 # Convert 24bit altitude from centimeters to feet.
-                alt = struct.unpack(">I", b"\0" + sample.altitude)[0] / 100.0 / 0.3048
+                alt = (
+                    struct.unpack(">I", b"\0" + sample.altitude)[0]
+                    / 100.0
+                    / 0.3048
+                )
                 heading = sample.heading * 360.0 / 256.0
             case 1:
                 when = datetime_str(sample.date, sample.tod)
@@ -898,7 +909,10 @@ class XGPS160(asyncio.Protocol):
         self.log_list_entries = [
             x
             for x in self.log_list_entries
-            if not (x["start_block"] == start_block and x["count_block"] == count_block)
+            if not (
+                x["start_block"] == start_block
+                and x["count_block"] == count_block
+            )
         ]
         return self.log_list_entries
 
