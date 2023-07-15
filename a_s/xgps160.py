@@ -29,13 +29,6 @@ install_tb(show_locals=True)
 DEVICES_DIR = "/dev/"
 XGPS_SERIAL_PATERN = "tty.XGPS160*"
 
-# Battery level conversion constants. See `parse_nmea()` for how these are
-# used.
-#
-K_VOLT_415 = 644
-K_VOLT_350 = 543
-
-
 # Keep up to 10,000 NMEA messages in memory. If we receive more messages than
 # that the oldest messages are tossed.
 #
@@ -72,10 +65,9 @@ LAT_LON_RESOLUTION = 2.1457672e-5
 #
 def get_lat_lon_24bit(buf: bytes) -> float:
     """
-    Keyword Arguments:
-    buf: bytearray --
+    Convert a 24bit lat/lon value in to its float equivalent.
     """
-    r = int.from_bytes(buf, byteorder="little")
+    r = struct.unpack(">i", b'\0' + buf)[0]
     d = float(r) * LAT_LON_RESOLUTION
 
     if r & 0x800000:
@@ -88,8 +80,7 @@ def get_lat_lon_24bit(buf: bytes) -> float:
 #
 def get_lat_lon_32bit(buf: bytes) -> float:
     """
-    Keyword Arguments:
-    buf: bytes --
+    Convert a 32bit lat/lon value in to its float equivalent.
     """
     r = struct.unpack(">i", buf)[0]
     return float(r) * 0.000001
@@ -97,7 +88,11 @@ def get_lat_lon_32bit(buf: bytes) -> float:
 
 ####################################################################
 #
-def datetime_str(date_bin: int, time_of_day: int, tenths_of_sec: int = 0) -> datetime:
+def datetime_str(date_bin: int, time_of_day: int, tenths_of_sec: int = 0, ) -> datetime:
+    """
+    The formula for converting the XGPS160 binary data for a date, time of
+    day, tenths of a sec to a python datetime object.
+    """
     year = 2012 + (date_bin // 372)
     month = 1 + (date_bin % 372) // 31
     day = 1 + (date_bin % 31)
@@ -136,6 +131,9 @@ def xgps_serialport():
 ########################################################################
 ########################################################################
 #
+# A struct and named tuple to make it slightly easier to parse the binary data
+# stream for the meta data associated with a recorded GPS track.
+#
 LogListItemStruct = struct.Struct("<BBHIHHH")
 LogListItem = namedtuple(
     "LogListItem",
@@ -144,6 +142,8 @@ LogListItem = namedtuple(
 
 ########################################################################
 ########################################################################
+#
+# A struct for parsing the settings information.
 #
 SettingsStruct = struct.Struct("<BBHH")
 Settings = namedtuple(
@@ -155,31 +155,10 @@ Settings = namedtuple(
 ########################################################################
 ########################################################################
 #
-class GPSSettings(enum.IntFlag):
-    """
-    The GPS Settings information is a single unsigned byte which has two flags:
-    DatalogEnabled and DatalogOverwrite.
-
-    NOTE: We are following the ObjC source code but we have never gotten back
-          any different values from the GPS for settings no matter what the
-          display indicates.
-          (We always get back `00010100`. Positions 0x40 and 0x80 are never set.
-    """
-
-    # If set then device will record to the datalog when it powers up
-    datalog_enabled = 0x40
-    # If set then when datalog memory fills up, overwrite the oldest entries.
-    datalog_overwrite = 0x80
-
-
-########################################################################
-########################################################################
-#
 class LoggingRate(enum.IntEnum):
     """
     Logging rate can only be one of the following enumerations
     """
-
     SEC_00_1 = 1  # 10hz
     SEC_00_2 = 2  # 5hz
     SEC_00_5 = 5  # 2hz
@@ -199,9 +178,8 @@ class LoggingRate(enum.IntEnum):
 #
 class Cmd160(enum.IntEnum):
     """
-    The possible commands for the XGPS160.
+    The possible commands and command responses for the XGPS160.
     """
-
     ack = 0
     nack = 1
     response = 2
@@ -263,18 +241,31 @@ class XGPS160(asyncio.Protocol):
 
         self.nmea_messages = deque(maxlen=max_nmea_msgs)
 
+        # This buffer pools together messages received from the device for
+        # parsing. If we do not have enough data for a complete command, we
+        # wait until more data is retrieved (and we can find a command in that
+        # data.)
         self.rcvd_buff = b""
 
-        self.rsp160_cmd = 0
-
-        self.rsp160_len = 0
-
+        self.transport = None
         self.is_connected = False
 
-        self.cfg_gps_settings = 0
-        self.transport = None
+        # XXX These are not set. Currently we are only talking to the device
+        #     via a bluetooth serial port. We will need to probe the bluetooth
+        #     device itself to get this data. My unit is running fw 3.7.3 so
+        #     most of the code is operating with that assumption.
+        #
         self.firmware_rev = ""
         self.serial_number = ""
+
+        self.cfg_gps_settings = 0
+        self.datalog_enabled = False
+        self.datalog_overwrite = False
+
+        # XXX We are getting the battery voltage via the GPPWR proprietary
+        #     message. We are not parsing it correctly so the value is only
+        #     advisory.
+
         self.battery_voltage = 0
         self.is_charging = False
         self.streaming_mode = True
@@ -290,16 +281,19 @@ class XGPS160(asyncio.Protocol):
         #
         self.log_data_samples = []
 
-        self.log_list_item_timer_started = False
+        # XXX These booleans are used as "signals" to note when the results
+        #     from a command have been processed. This is mostly an artifact of
+        #     how I copied the code from the ObjC project. Need to properly
+        #     make these signals and if you have multiple calls open at the
+        #     same time we only process the data once (and return it multiple
+        #     times)
+        #
+        # For now my simplistic usage this is good enough (just to get all the
+        # recorded data and store it)
+        #
         self.new_log_list_item_received = False
-
-        self.datalog_enabled = False
-        self.datalog_overwrite = False
-
         self.device_settings_have_been_read = False
         self.bulk_data_has_been_read = False
-
-        self.total_GPS_samples_in_log_entry = 0
 
     ####################################################################
     #
@@ -323,6 +317,9 @@ class XGPS160(asyncio.Protocol):
             baudrate=115200,
         )
 
+        # XXX This is going to wait forever. We should have a timeout and if
+        #     does not connect in that time raise an exception or return False.
+        #
         while not xgps_160.is_connected:
             await asyncio.sleep(0.1)
 
@@ -382,7 +379,8 @@ class XGPS160(asyncio.Protocol):
                     #
                     if len(self.rcvd_buff) < 3:
                         rprint(
-                            f"[red]Binary packet too short (length {len(self.rcvd_buff)})[/red]"
+                            "[red]Binary packet too short (length "
+                            f"{len(self.rcvd_buff)}[/red])"
                         )
                         return
 
