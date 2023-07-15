@@ -59,8 +59,8 @@ async def main(loop):
     for entry, data in gps_data:
         gpx_segment.points.append(
             GPXTrackPoint(
-                data["longitude"],
-                data["latitude"],
+                longitude=data["longitude"],
+                latitude=data["latitude"],
                 elevation=data["altitude"],
                 time=data["datetime"],
             )

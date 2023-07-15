@@ -91,9 +91,8 @@ def get_lat_lon_32bit(buf: bytes) -> float:
     Keyword Arguments:
     buf: bytes --
     """
-    r = int.from_bytes(buf, byteorder="big")
-    d = float(r) * 0.000001
-    return d
+    r = struct.unpack(">i", buf)[0]
+    return float(r) * 0.000001
 
 
 ####################################################################
@@ -417,11 +416,6 @@ class XGPS160(asyncio.Protocol):
                     cs = sum(self.rcvd_buff[: cmd_resp_length + 3]) & 255
                     cmd_response = self.rcvd_buff[3 : cmd_resp_length + 3]
 
-                    # rprint(
-                    #     f"header: {self.rcvd_buff[:3].hex(':')}, msg len: "
-                    #     f"{cmd_resp_length}, msg: {cmd_response.hex(':')}"
-                    # )
-
                     if checksum == cs:
                         try:
                             self.parse_command_response(cmd_response)
@@ -540,7 +534,6 @@ class XGPS160(asyncio.Protocol):
                     case Cmd160.logListItem:
                         self.parse_log_list_item(cmd_response[2:])
                     case Cmd160.logReadBulk:
-                        # rprint(f"log read bulk, full response: {self.rcvd_buff.hex(':')}")
                         self.parse_log_read_bulk(cmd_response[2:])
                     case Cmd160.logDelBlock:
                         if cmd_response[2] == 0x01:
@@ -584,8 +577,6 @@ class XGPS160(asyncio.Protocol):
         Keyword Arguments:
         log_item_data --
         """
-        # rprint(f"log item, len: {len(log_item_data)}: {log_item_data.hex(':')}")
-
         list_idx, list_total = struct.unpack_from(
             ">HH",
             log_item_data,
@@ -611,14 +602,10 @@ class XGPS160(asyncio.Protocol):
                 5,
             )
         )
-        # rprint(f"  {log_item}")
-
         log_start_time = datetime_str(
             log_item.start_date,
             log_item.start_tod,
         )
-        # rprint(f"  log start time: {log_start_time}")
-
         sample_interval = float(log_item.interval)
         if log_item.interval == 255:
             sample_interval = 10.0
@@ -671,7 +658,6 @@ class XGPS160(asyncio.Protocol):
         # been retrieved.
         #
         if addr == 0 and data_size == 0:
-            rprint(f"Loaded {len(self.log_data_samples)} from device")
             self.bulk_data_has_been_read = True
             return
 
@@ -763,17 +749,8 @@ class XGPS160(asyncio.Protocol):
         match entry.type:
             case 2:
                 when = datetime_str(sample.date, sample.tod, tenths_of_sec=sample.tod2, )
-                r = struct.unpack("<I", sample.latitude)[0]
-                rprint("latitude: {sample.latitudue.hex(':')}, decoded: {r}" )
-                # lat = float(r) * LAT_LON_RESOLUTION
-                lat = float(r) * 0.000001
-                if r & 0x800000:
-                    lat = -lat
-                r = struct.unpack("<I", sample.longitude)[0]
-                # lon = float(r) * LAT_LON_RESOLUTION
-                lon = float(r) * 0.000001
-                if r & 0x800000:
-                    lon = -lon
+                lat = get_lat_lon_32bit(sample.latitude)
+                lon = get_lat_lon_32bit(sample.longitude)
                 # Convert 24bit altitude from centimeters to feet.
                 alt = struct.unpack(">I",b'\0' + sample.altitude)[0] / 100.0 / 0.3048
                 heading = sample.heading * 360.0 / 256.0
