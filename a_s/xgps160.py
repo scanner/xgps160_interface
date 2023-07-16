@@ -99,19 +99,18 @@ def datetime_str(
     month = 1 + (date_bin % 372) // 31
     day = 1 + (date_bin % 31)
 
+    tod = tenths_of_sec & 0x10
+    tod <<= 12
+    tod |= time_of_day
+    tod10th = tenths_of_sec & 0x0F
+
+    time_of_day = tod
     hour = time_of_day // 3600
     minute = (time_of_day % 3600) // 60
     second = time_of_day % 60
+    usec = tod10th * 100_000
 
-    # XXX This is not correct. ObjC code:
-    #        tod = (d->tod2 & 0x10);
-    #        tod <<= 12;
-    #        tod |= d->tod;
-    #        tod10th = d->tod2 & 0x0F;
-    #
-    usec = tenths_of_sec * 100_000
-
-    return datetime(
+    dt = datetime(
         year=year,
         month=month,
         day=day,
@@ -121,6 +120,7 @@ def datetime_str(
         microsecond=usec,
         tzinfo=UTC,
     )
+    return dt
 
 
 ####################################################################
@@ -477,7 +477,10 @@ class XGPS160(asyncio.Protocol):
 
                     try:
                         self.parse_nmea(nmea_packet)
-                    except pynmea2.nmea.SentenceTypeError as exc:
+                    except (
+                        pynmea2.nmea.SentenceTypeError,
+                        pynmea2.nmea.ParseError,
+                    ) as exc:
                         rprint(
                             f"[red][bold]NMEA Parse error:[/bold] {exc}[/red]"
                         )
@@ -778,8 +781,11 @@ class XGPS160(asyncio.Protocol):
         """
         match entry.type:
             case 2:
-                # when = datetime_str(sample.date, sample.tod, tenths_of_sec=sample.tod2, )
-                when = datetime_str(sample.date, sample.tod)
+                when = datetime_str(
+                    sample.date,
+                    sample.tod,
+                    tenths_of_sec=sample.tod2,
+                )
                 lat = get_lat_lon_32bit(sample.latitude)
                 lon = get_lat_lon_32bit(sample.longitude)
                 # Convert 24bit altitude from centimeters to feet.
