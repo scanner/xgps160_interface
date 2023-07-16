@@ -35,12 +35,16 @@ DEFAULT_MAX_NMEA_MESSAGES = 10_000
 # seq - sequence number of the record (wrap after 255)
 # type - 0 = dataentry_t, 2=dataentry2_t,
 #
+# XXX We should consider converting these namedtuple's in to dataclasses.
+#
 LogEntryStruct = struct.Struct("<BB")
 LogEntry = namedtuple("LogEntry", "seq type")
 
 DataEntryStruct = struct.Struct("<HHB3s3s3sHBBBB")
 
 # NOTE: latitude, longitude, altitude are 3 byte long `bytes`
+#
+# XXX We should consider converting these namedtuple's in to dataclasses.
 # type. Need to do int.from_bytes(bytes,byteorder="big",signed=True)
 #
 DataEntry = namedtuple(
@@ -49,6 +53,8 @@ DataEntry = namedtuple(
 )
 # NOTE: Longitutde, latitude, altitude are MSB order so need to be
 #       interprete separately with int.from_bytes()
+#
+# XXX We should consider converting these namedtuple's in to dataclasses.
 #
 Data2EntryStruct = struct.Struct("<HHB4s4s3sHBB")
 Data2Entry = namedtuple(
@@ -142,6 +148,8 @@ def xgps_serialport():
 # A struct and named tuple to make it slightly easier to parse the binary data
 # stream for the meta data associated with a recorded GPS track.
 #
+# XXX We should consider converting these namedtuple's in to dataclasses.
+#
 LogListItemStruct = struct.Struct("<BBHIHHH")
 LogListItem = namedtuple(
     "LogListItem",
@@ -152,6 +160,8 @@ LogListItem = namedtuple(
 ########################################################################
 #
 # A struct for parsing the settings information.
+#
+# XXX We should consider converting these namedtuple's in to dataclasses.
 #
 SettingsStruct = struct.Struct("<BBHH")
 Settings = namedtuple(
