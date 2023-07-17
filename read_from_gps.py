@@ -6,14 +6,14 @@
 Read the stored tracks in the XGPS160 and download them in to GPX files.
 
 Usage:
-    read_from_gps.py [--delete] [--no-download]
+    read_from_gps.py [--delete] [--no-write]
 
 Options:
   --version
   -h, --help        Show this text and exit
   --delete          Delete all the gps tracks in the device
                     (after download step)
-  --no-download     Do not download the tracks (handy if you have already
+  --no-write        Do not write the tracks (handy if you have already
                     downloaded them and you just want to delete the tracks
                     in the device.)
 """
@@ -21,6 +21,7 @@ Options:
 #
 import asyncio
 from datetime import timedelta
+from typing import List
 
 # 3rd party imports
 #
@@ -41,7 +42,7 @@ VERSION = "0.2"
 
 ####################################################################
 #
-async def download_gps_tracks(xgps: XGPS160, log_list):
+async def download_gps_tracks(xgps: XGPS160, log_list: List, write: bool):
     """
     Download all of the GPS tracks from the device and write the data out
     in to GPS formatted files. The names of the files are from the start and
@@ -55,9 +56,15 @@ async def download_gps_tracks(xgps: XGPS160, log_list):
         for log in log_list:
             progress.console.print(
                 f"Downloading GPS data for log {log['start_block']}-"
-                f"{log['count_block']}"
+                f"{log['count_block']}",
+                end="",
             )
             gps_data = await xgps.get_gps_sample_data_for_log_list_item(log)
+            start_time = gps_data[0][1]["datetime"]
+            end_time = gps_data[-1][1]["datetime"]
+            progress.console.print(
+                f"{log['start_block']}, start: {start_time.strftime('%Y-%m-%d %H:%M:%S')}, end: {end_time.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
             progress.update(task, advance=1)
             gps_tracks.append(gps_data)
 
@@ -79,7 +86,7 @@ async def download_gps_tracks(xgps: XGPS160, log_list):
 
     # make the start & end time the timestamp of the first entry in the first
     # track we got from the GPS.
-    end_time = gps_tracks[0][0][1]["datetime"]
+    end_time = gps_tracks[0][-1][1]["datetime"]
     start_time = gps_tracks[0][0][1]["datetime"]
 
     # If it has been more than 45 minutes between one data record ending and
@@ -100,12 +107,14 @@ async def download_gps_tracks(xgps: XGPS160, log_list):
             # entry is more than min timedelta from the timestamp of the last
             # entry in the previous track.
             #
-            if gps_track[0][1]["datetime"] - end_time > min_timedelta:
+            td = gps_track[0][1]["datetime"] - end_time
+            if td > min_timedelta:
                 start = start_time.strftime(dt_format)
                 end = end_time.strftime(dt_format)
                 filename = f"{start}--{end}.gpx"
-                with open(filename, "w") as f:
-                    f.write(gpx.to_xml())
+                if write:
+                    with open(filename, "w") as f:
+                        f.write(gpx.to_xml())
                 progress.console.print(
                     f"Wrote gps track [blue]`{filename}`[/blue]"
                 )
@@ -119,7 +128,6 @@ async def download_gps_tracks(xgps: XGPS160, log_list):
                 # track.
                 #
                 start_time = gps_track[0][1]["datetime"]
-                end_time = gps_track[-1][1]["datetime"]
             # elif gps_track[0][1]["datetime"] - end_time > seg_timedelta:
             #     gpx_segment = GPXTrackSegment()
             #     gpx_track.segments.append(gpx_segment)
@@ -138,6 +146,7 @@ async def download_gps_tracks(xgps: XGPS160, log_list):
                 )
                 # progress.update(task_points, advance=1)
             progress.update(task_tracks, advance=1)
+            end_time = gps_track[-1][1]["datetime"]
 
     # and at the end write the final collected track out.
     #
@@ -158,7 +167,7 @@ async def main(loop):
     """
     args = docopt(__doc__, version=VERSION)
     delete = args["--delete"]
-    download = not args["--no-download"]
+    write = not args["--no-write"]
 
     ser_port = xgps_serialport()
     rprint(f"XGPS serial port: {ser_port}")
@@ -173,9 +182,8 @@ async def main(loop):
     rprint(f"number of log list entries: {len(log_list)}")
     rprint(f"percent storage used: {xgps.get_used_storage_percent()}")
 
-    if download:
-        rprint("Downloading GPS data..")
-        await download_gps_tracks(xgps, log_list)
+    rprint("Downloading GPS data..")
+    await download_gps_tracks(xgps, log_list, write)
 
     # Now that we have downloaded and saved the gps data we can delete it from
     # the device.
