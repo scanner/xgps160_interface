@@ -13,7 +13,8 @@ Options:
   -h, --help        Show this text and exit
   --delete          Delete all the gps tracks in the device
                     (after download step)
-  --no-write        Do not write the tracks (handy if you have already
+  --no-write        Do not write the tracks (handy for testing)
+  --no-downlaod     Do not download the tracks (handy if you have already
                     downloaded them and you just want to delete the tracks
                     in the device.)
 """
@@ -168,6 +169,7 @@ async def main(loop):
     args = docopt(__doc__, version=VERSION)
     delete = args["--delete"]
     write = not args["--no-write"]
+    download = not args["--no-download"]
 
     ser_port = xgps_serialport()
     rprint(f"XGPS serial port: {ser_port}")
@@ -182,8 +184,9 @@ async def main(loop):
     rprint(f"number of log list entries: {len(log_list)}")
     rprint(f"percent storage used: {xgps.get_used_storage_percent()}")
 
-    rprint("Downloading GPS data..")
-    await download_gps_tracks(xgps, log_list, write)
+    if download:
+        rprint("Downloading GPS data..")
+        await download_gps_tracks(xgps, log_list, write)
 
     # Now that we have downloaded and saved the gps data we can delete it from
     # the device.
