@@ -6,7 +6,7 @@
 Read the stored tracks in the XGPS160 and download them in to GPX files.
 
 Usage:
-    read_from_gps.py [--delete] [--no-write]
+    read_from_gps.py [--delete] [--no-write] [--no-download]
 
 Options:
   --version
@@ -14,7 +14,7 @@ Options:
   --delete          Delete all the gps tracks in the device
                     (after download step)
   --no-write        Do not write the tracks (handy for testing)
-  --no-downlaod     Do not download the tracks (handy if you have already
+  --no-download     Do not download the tracks (handy if you have already
                     downloaded them and you just want to delete the tracks
                     in the device.)
 """
