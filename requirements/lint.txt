@@ -4,17 +4,17 @@
 #
 #    pip-compile --output-file=lint.txt lint.in
 #
-black==23.7.0
+black==23.10.0
     # via -r lint.in
-cfgv==3.3.1
+cfgv==3.4.0
     # via pre-commit
-click==8.1.5
+click==8.1.7
     # via black
-distlib==0.3.6
+distlib==0.3.7
     # via virtualenv
-filelock==3.12.2
+filelock==3.12.4
     # via virtualenv
-identify==2.5.24
+identify==2.5.30
     # via pre-commit
 isort==5.12.0
     # via -r lint.in
@@ -22,21 +22,21 @@ mypy-extensions==1.0.0
     # via black
 nodeenv==1.8.0
     # via pre-commit
-packaging==23.1
+packaging==23.2
     # via black
-pathspec==0.11.1
+pathspec==0.11.2
     # via black
-platformdirs==3.9.1
+platformdirs==3.11.0
     # via
     #   black
     #   virtualenv
-pre-commit==3.3.3
+pre-commit==3.5.0
     # via -r lint.in
-pyyaml==6.0
+pyyaml==6.0.1
     # via pre-commit
-ruff==0.0.278
+ruff==0.1.0
     # via -r lint.in
-virtualenv==20.24.0
+virtualenv==20.24.5
     # via pre-commit
 
 # The following packages are considered to be unsafe in a requirements file:
