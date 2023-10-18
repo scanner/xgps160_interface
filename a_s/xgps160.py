@@ -483,7 +483,7 @@ class XGPS160(asyncio.Protocol):
                     if b"\r\n" not in self.rcvd_buff:
                         return
                     crlf_pos = self.rcvd_buff.find(b"\r\n")
-                    nmea_packet = self.rcvd_buff[:crlf_pos].decode("utf-8")
+                    nmea_packet = self.rcvd_buff[:crlf_pos].decode("ascii")
 
                     try:
                         self.parse_nmea(nmea_packet)
