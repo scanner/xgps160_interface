@@ -639,7 +639,6 @@ class XGPS160(asyncio.Protocol):
         log_item = LogListItem._make(
             LogListItemStruct.unpack_from(
                 log_item_data,
-                # 4,
                 5,
             )
         )
@@ -685,7 +684,6 @@ class XGPS160(asyncio.Protocol):
         log["start_block"] = log_item.start_block
         log["count_block"] = log_item.count_block
         self.log_list_entries.append(log)
-        # pprint(log)
 
     ####################################################################
     #
