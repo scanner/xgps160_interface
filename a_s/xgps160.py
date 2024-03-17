@@ -12,7 +12,7 @@ import struct
 import traceback
 from collections import deque, namedtuple
 from datetime import UTC, datetime, timedelta
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # 3rd party imports
 #
@@ -259,7 +259,7 @@ class XGPS160(asyncio.Protocol):
         self.serial_port = serial_port
         self.console = console
 
-        self.nmea_messages = deque(maxlen=max_nmea_msgs)
+        self.nmea_messages: pynmea2.NMEASentence = deque(maxlen=max_nmea_msgs)
 
         # This buffer pools together messages received from the device for
         # parsing. If we do not have enough data for a complete command, we
@@ -267,7 +267,7 @@ class XGPS160(asyncio.Protocol):
         # data.)
         self.rcvd_buff = b""
 
-        self.transport = None
+        self.transport: Optional[asyncio.WriteTransport] = None
         self.is_connected = False
 
         # XXX These are not set. Currently we are only talking to the device
@@ -293,13 +293,15 @@ class XGPS160(asyncio.Protocol):
         # A list of the log entries in the device. Refreshed when
         # `get_recorded_logs()` is called and completes.
         #
-        self.log_list_entries = []
+        self.log_list_entries: List[Dict[str, Any]] = []
 
         # An array used to build up GPS sample data retrieved for
         # get_gps_sample_data_for_log_list_item(). Only valid during the
         # duration of that call.
         #
-        self.log_data_samples = []
+        self.log_data_samples: List[
+            Tuple[LogEntry, Union[DataEntry, Data2Entry]]
+        ] = []
 
         # XXX These booleans are used as "signals" to note when the results
         #     from a command have been processed. This is mostly an artifact of
@@ -772,15 +774,15 @@ class XGPS160(asyncio.Protocol):
 
         # Parse the custom power settings
         #
-        nmea_packet = nmea_packet.split(",")
-        self.is_charging = True if nmea_packet[5] == "1" else False
+        nmea_packet_elts = nmea_packet.split(",")
+        self.is_charging = True if nmea_packet_elts[5] == "1" else False
 
         # ??? the objC code looks for NMEA sentences with '@' in them, and we
         # are looking at GPPWR ones. The translation of the battery voltage
         # does not correlated.
         #
         # NOTE: 1280 is 96%
-        self.battery_voltage = int(nmea_packet[1], 16)
+        self.battery_voltage = int(nmea_packet_elts[1], 16)
 
     ####################################################################
     #
@@ -841,6 +843,7 @@ class XGPS160(asyncio.Protocol):
         message = message_header + payload
         checksum = struct.pack("<B", sum(message) & 255)
 
+        assert self.transport
         self.transport.write(message + checksum)
 
     ####################################################################
@@ -960,7 +963,7 @@ class XGPS160(asyncio.Protocol):
 
     ####################################################################
     #
-    async def datalog_overwrite(self, overwrite: bool):
+    async def set_datalog_overwrite(self, overwrite: bool):
         """
         If overwrite is True then when storage fills up the oldest log
         records will be overwritten as new data comes in.
@@ -1014,7 +1017,7 @@ class XGPS160(asyncio.Protocol):
         """
         # Must be at least firmware version 1.3.5 or greather.
         #
-        if not self.check_for_adjustable_rate_logging:
+        if not self.check_for_adjustable_rate_logging():
             return False
 
         payload = struct.pack("<B", rate)

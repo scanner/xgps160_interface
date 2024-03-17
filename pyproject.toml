@@ -25,7 +25,7 @@ line-length = 80
 exclude = [
     'migrations/.+\.py$',
 ]
-ignore = [
+lint.ignore = [
        "E501",   # Ignore lines that are too long
 ]
 
@@ -44,7 +44,7 @@ exclude = [
     'requirements',
     'migrations'
 ]
-plugins = ["mypy_django_plugin.main"]
+
 strict_optional = true
 ignore_missing_imports = true
 

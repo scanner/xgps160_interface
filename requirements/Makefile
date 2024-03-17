@@ -13,7 +13,7 @@ venv_req:
 	@touch "$@"
 
 %.txt: %.in venv_req
-	$(ACTIVATE) pip-compile --resolver=backtracking --quiet --output-file "$@" "$<"
+	$(ACTIVATE) pip-compile --strip-extras --resolver=backtracking --quiet --output-file "$@" "$<"
 
 development.txt: production.txt lint.txt
 
